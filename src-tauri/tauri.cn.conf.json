@@ -1,0 +1,7 @@
+{
+  "productName": "Aurora Launcher CN",
+  "identifier": "com.aurora.launcher.cn",
+  "bundle": {
+    "targets": ["nsis"]
+  }
+}

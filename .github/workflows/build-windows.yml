@@ -1,0 +1,99 @@
+name: Windows Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: standard
+            output_dir: target/release
+          - variant: cn
+            output_dir: target/cn/release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build ${{ matrix.variant }} installer
+        run: node scripts/build-variant.mjs ${{ matrix.variant }}
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          Copy-Item "${{ matrix.output_dir }}/aurora-launcher.exe" "staging/aurora-launcher-${{ matrix.variant }}.exe"
+          Copy-Item "${{ matrix.output_dir }}/bundle/nsis/*.exe" "staging/aurora-launcher-${{ matrix.variant }}-setup.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aurora-${{ matrix.variant }}
+          path: staging/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches package version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match package version v$version"
+          }
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item "artifacts/aurora-standard/aurora-launcher-standard.exe" "release/Aurora-Launcher-$version-standard-portable.exe"
+          Copy-Item "artifacts/aurora-standard/aurora-launcher-standard-setup.exe" "release/Aurora-Launcher-$version-standard-x64-setup.exe"
+          Copy-Item "artifacts/aurora-cn/aurora-launcher-cn.exe" "release/Aurora-Launcher-$version-cn-restricted-portable.exe"
+          Copy-Item "artifacts/aurora-cn/aurora-launcher-cn-setup.exe" "release/Aurora-Launcher-$version-cn-restricted-x64-setup.exe"
+          Get-ChildItem release -Filter *.exe | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding ascii release/SHA256SUMS.txt
+          Get-ChildItem release | Format-Table Name, Length
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Aurora Launcher ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          files: release/*

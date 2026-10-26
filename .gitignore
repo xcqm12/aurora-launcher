@@ -1,0 +1,27 @@
+# Rust build
+/target/
+
+# Frontend dependencies and build
+/node_modules/
+/dist/
+
+# Local secrets and environment
+.env
+.env.*
+!.env.example
+
+# Local Cargo mirror override (environment-specific, see README)
+.cargo/config.toml
+
+# Tauri generated artifacts
+/src-tauri/gen/
+/src-tauri/target/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local agent workspace
+.zcode/

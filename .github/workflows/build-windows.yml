@@ -37,6 +37,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # generate_context! embeds ../dist at compile time, so the frontend
+      # build must exist before any cargo command runs.
+      - name: Build frontend
+        run: node node_modules/typescript/bin/tsc --noEmit && node node_modules/vite/bin/vite.js build
+
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 

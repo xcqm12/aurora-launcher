@@ -7,6 +7,24 @@ if (variant === "cn") {
   env.AURORA_REGION_LOCK = "CN";
   env.CARGO_TARGET_DIR = path.join(process.cwd(), "target", "cn");
 }
+
+// Frontend must be built first: tauri's generate_context! embeds ../dist at
+// compile time. Run tsc/vite directly to avoid .cmd shims, which spawnSync
+// rejects with EINVAL on Windows.
+const tsc = spawnSync(
+  process.execPath,
+  [path.join("node_modules", "typescript", "bin", "tsc"), "--noEmit"],
+  { stdio: "inherit", env },
+);
+if (tsc.status !== 0) process.exit(tsc.status ?? 1);
+
+const vite = spawnSync(
+  process.execPath,
+  [path.join("node_modules", "vite", "bin", "vite.js"), "build"],
+  { stdio: "inherit", env },
+);
+if (vite.status !== 0) process.exit(vite.status ?? 1);
+
 const args = [
   path.join("node_modules", "@tauri-apps", "cli", "tauri.js"),
   "build",

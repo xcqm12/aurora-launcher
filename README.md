@@ -53,6 +53,13 @@ Windows 优先的 Minecraft 启动器原型，Rust + Tauri 2 + React 19。界面
 7. **随机图风险**：`dmoe.cc/random.php` 返回无审核随机图片，可能包含不适宜内容，且会把 IP 暴露给第三方；因此默认关闭、加模糊遮罩。
 8. **构建输出路径**：工作区根 `target/` 才是实际产物目录，CI 已修正；CI 中同时构建 standard 与 cn 两个 target 目录。
 9. **前端 npm 安装中断**：大包下载出现 `ECONNRESET`，重试后完成；`npm run build` 直接调用本地 `tsc`/`vite` 二进制以避免 Windows shim 问题。
+10. **CI 中 `generate_context!` 找不到 dist**：`cargo test` 在前端构建前执行会触发宏 panic；CI 已改为先构建前端再跑测试，并让 tag 指向包含该修复的提交。
+11. **GitHub 直连抖动**：推送时段 github.com 的默认 DNS IP 超时（443 连接超时），稍后自动恢复；未做 IP 扫描，仅重试推送。
+
+## 发布
+
+- 仓库：<https://github.com/xcqm12/aurora-launcher>
+- Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.2.0>
 
 ## 开发与构建
 

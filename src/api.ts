@@ -11,6 +11,7 @@ export type Instance = {
   java_path?: string | null;
   memory_mb: number;
   created_at: number;
+  launch_version_id?: string | null;
 };
 
 export type LoaderInfo = { id: string; name: string; kind: string; support: string };
@@ -93,9 +94,46 @@ export type LoaderCatalog = {
   note: string;
 };
 
-export type AppSettings = { proxy: string; sakura_enabled: boolean };
+export type AppSettings = {
+  proxy: string;
+  sakura_enabled: boolean;
+  shared_game_dir: string;
+  download_source: string;
+  ms_client_id: string;
+  active_account: string;
+};
 export type ProxyTest = { ok: boolean; status: number; latency_ms: number; message: string };
 export type SakuraBackground = { data_url: string; cached: boolean };
+export type AccountView = {
+  id: string;
+  kind: string;
+  name: string;
+  uuid: string;
+  active: boolean;
+};
+export type DeviceCode = {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+  message: string;
+};
+export type PollResult = {
+  status: string;
+  account?: AccountView | null;
+  message: string;
+};
+export type LoaderInstallResult = { version_id: string; installer: string; log: string };
+export type ImportResult = {
+  kind: string;
+  name: string;
+  files: number;
+  overrides: number;
+  loader?: string | null;
+  loader_version?: string | null;
+  minecraft?: string | null;
+};
 export type AppInfo = {
   name: string;
   version: string;
@@ -163,4 +201,27 @@ export const api = {
     invoke<string>("download_loader_installer", { instanceId, url }),
   setCurseForgeKey: (key: string) => invoke<void>("set_curseforge_key", { key }),
   clearCurseForgeKey: () => invoke<void>("clear_curseforge_key"),
+  launchInstance: (instanceId: string) => invoke<string>("launch_instance", { instanceId }),
+  killInstance: (instanceId: string) => invoke<void>("kill_instance", { instanceId }),
+  launchStatus: (instanceId: string) => invoke<string>("get_launch_status", { instanceId }),
+  instanceLog: (instanceId: string) => invoke<string[]>("get_instance_log", { instanceId }),
+  installLoader: (instanceId: string, loader: string, version: string) =>
+    invoke<LoaderInstallResult>("install_loader", { instanceId, loader, version }),
+  importPack: (instanceId: string, path: string) =>
+    invoke<ImportResult>("import_instance_pack", { instanceId, path }),
+  importWorld: (instanceId: string, path: string) =>
+    invoke<string>("import_instance_world", { instanceId, path }),
+  exportPack: (instanceId: string, path: string) =>
+    invoke<string>("export_instance_pack", { instanceId, path }),
+  pickPackFile: () => invoke<string | null>("pick_pack_file"),
+  pickWorldFile: () => invoke<string | null>("pick_world_file"),
+  pickExportFile: (defaultName: string) => invoke<string | null>("pick_export_file", { defaultName }),
+  pickFolder: () => invoke<string | null>("pick_folder"),
+  pickJavaFile: () => invoke<string | null>("pick_java_file"),
+  accounts: () => invoke<AccountView[]>("list_accounts"),
+  addOfflineAccount: (name: string) => invoke<AccountView>("add_offline_account", { name }),
+  setActiveAccount: (id: string) => invoke<void>("set_active_account", { id }),
+  removeAccount: (id: string) => invoke<void>("remove_account", { id }),
+  msStartLogin: () => invoke<DeviceCode>("ms_start_login"),
+  msPollLogin: (deviceCode: string) => invoke<PollResult>("ms_poll_login", { deviceCode }),
 };

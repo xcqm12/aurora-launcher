@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   Boxes,
   Brush,
@@ -19,6 +20,7 @@ import {
   LoaderCircle,
   Monitor,
   PackageOpen,
+  Play,
   Plus,
   RefreshCw,
   Search,
@@ -31,7 +33,9 @@ import {
 } from "lucide-react";
 import {
   api,
+  AccountView,
   AppInfo,
+  DeviceCode,
   AppSettings,
   CurseForgeFile,
   DiscoverItem,
@@ -171,7 +175,14 @@ function App() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [activeId, setActiveId] = useState("");
   const [manifest, setManifest] = useState<VersionManifest | null>(null);
-  const [settings, setSettings] = useState<AppSettings>({ proxy: "", sakura_enabled: false });
+  const [settings, setSettings] = useState<AppSettings>({
+    proxy: "",
+    sakura_enabled: false,
+    shared_game_dir: "",
+    download_source: "official",
+    ms_client_id: "",
+    active_account: "",
+  });
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [sakura, setSakura] = useState("");
   const [javaCount, setJavaCount] = useState(0);
@@ -449,6 +460,7 @@ function App() {
             onNotice={setNotice}
             onOpenExternal={openExternal}
             onCreate={() => setShowCreate(true)}
+            onRefresh={refreshInstances}
           />
         )}
 
@@ -1269,6 +1281,10 @@ function Instances({
   onNotice: (message: string) => void;
   onCreate: () => void;
 }) {
+  const [managerFor, setManagerFor] = useState<Instance | null>(null);
+  const [logFor, setLogFor] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
   const remove = async (instance: Instance) => {
     if (!window.confirm(`删除实例「${instance.name}」及其目录？此操作不可撤销。`)) return;
     try {
@@ -1288,6 +1304,25 @@ function Instances({
     }
   };
 
+  const launch = async (instance: Instance) => {
+    setBusy(instance.id);
+    try {
+      const status = await api.launchStatus(instance.id);
+      if (status === "running" || status === "preparing") {
+        await api.killInstance(instance.id);
+        onNotice("已发送停止指令");
+        return;
+      }
+      setLogFor(instance.id);
+      await api.launchInstance(instance.id);
+      onNotice("正在启动游戏，日志面板已打开");
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div className="page-stack">
       <section className="section-heading">
@@ -1295,7 +1330,7 @@ function Instances({
           <span className="eyebrow">ISOLATED INSTANCES</span>
           <h3>{instances.length ? `${instances.length} 个游戏实例` : "还没有游戏实例"}</h3>
           <p className="section-subtitle">
-            每个实例拥有独立的 mods、资源包、光影、世界、日志与游戏目录。
+            每个实例拥有独立的 mods、资源包、光影、世界、日志与 game 目录；共享目录只复用只读的 assets/libraries。
           </p>
         </div>
         <button className="primary-button" onClick={onCreate}>
@@ -1346,8 +1381,12 @@ function Instances({
                   {instance.directory}
                 </p>
                 <div className="instance-actions">
-                  <button className="launch-button" disabled title="游戏启动链路尚未接入">
-                    {activeId === instance.id ? "当前实例" : "选择实例"}
+                  <button className="launch-button" onClick={() => void launch(instance)} disabled={busy === instance.id}>
+                    {busy === instance.id ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}
+                    启动游戏
+                  </button>
+                  <button className="icon-button" title="实例设置" onClick={() => setManagerFor(instance)}>
+                    <Settings2 size={16} />
                   </button>
                   <button className="icon-button" title="打开目录" onClick={() => void open(instance)}>
                     <FolderOpen size={16} />
@@ -1361,7 +1400,279 @@ function Instances({
           ))}
         </div>
       )}
+
+      {managerFor && (
+        <InstanceManager
+          instance={managerFor}
+          onClose={() => setManagerFor(null)}
+          onRefresh={onRefresh}
+          onNotice={onNotice}
+          onLaunch={() => {
+            setManagerFor(null);
+            void launch(managerFor);
+          }}
+        />
+      )}
+      {logFor && <LogPanel instanceId={logFor} onClose={() => setLogFor(null)} />}
     </div>
+  );
+}
+
+function InstanceManager({
+  instance,
+  onClose,
+  onRefresh,
+  onNotice,
+  onLaunch,
+}: {
+  instance: Instance;
+  onClose: () => void;
+  onRefresh: () => Promise<void>;
+  onNotice: (message: string) => void;
+  onLaunch: () => void;
+}) {
+  const [java, setJava] = useState(instance.java_path ?? "");
+  const [memory, setMemory] = useState(instance.memory_mb);
+  const [loaderVersion, setLoaderVersion] = useState(instance.loader_version ?? "");
+  const [installLog, setInstallLog] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const save = async () => {
+    setBusy("save");
+    try {
+      await api.updateInstance({
+        id: instance.id,
+        javaPath: java.trim(),
+        memoryMb: memory,
+      });
+      await onRefresh();
+      onNotice("实例设置已保存");
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const pickJava = async () => {
+    const path = await api.pickJavaFile();
+    if (path) setJava(path);
+  };
+
+  const installLoader = async () => {
+    if (!loaderVersion.trim()) {
+      onNotice("请填写加载器版本");
+      return;
+    }
+    setBusy("loader");
+    setInstallLog("");
+    try {
+      const result = await api.installLoader(instance.id, instance.loader, loaderVersion.trim());
+      setInstallLog(result.log);
+      await onRefresh();
+      onNotice(`加载器安装完成：${result.version_id}`);
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const importPack = async () => {
+    const path = await api.pickPackFile();
+    if (!path) return;
+    setBusy("pack");
+    try {
+      const result = await api.importPack(instance.id, path);
+      await onRefresh();
+      onNotice(
+        `已导入 ${result.name}：${result.files} 个文件、${result.overrides} 个覆盖文件` +
+          (result.loader ? `；加载器 ${result.loader} ${result.loader_version ?? ""}` : ""),
+      );
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const importWorld = async () => {
+    const path = await api.pickWorldFile();
+    if (!path) return;
+    setBusy("world");
+    try {
+      const target = await api.importWorld(instance.id, path);
+      onNotice(`世界已导入：${target}`);
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const exportPack = async () => {
+    const path = await api.pickExportFile(instance.name);
+    if (!path) return;
+    setBusy("export");
+    try {
+      const result = await api.exportPack(instance.id, path);
+      onNotice(`整合包已导出：${result}`);
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <div className="modal wide">
+        <div className="modal-top">
+          <span>{instance.name} · 实例设置</span>
+          <button className="icon-button" onClick={onClose}>
+            <X size={17} />
+          </button>
+        </div>
+        <div className="form-stack">
+          <div className="two-columns">
+            <label className="field-label">
+              Java 路径
+              <div className="inline-field">
+                <input value={java} onChange={(event) => setJava(event.target.value)} placeholder="留空自动检测 Java 17/21" />
+                <button className="ghost-button" onClick={() => void pickJava()}>浏览</button>
+              </div>
+            </label>
+            <label className="field-label">
+              内存 (MB)
+              <input
+                type="number"
+                min={512}
+                max={32768}
+                value={memory}
+                onChange={(event) => setMemory(Number(event.target.value))}
+              />
+            </label>
+          </div>
+          <p className="security-note">
+            启动版本：{instance.launch_version_id ?? instance.minecraft_version} · 目录：{instance.directory}
+          </p>
+
+          <div className="settings-actions">
+            <button className="ghost-button" onClick={onLaunch}><Play size={15} /> 启动</button>
+            <button className="primary-button" onClick={() => void save()} disabled={busy === "save"}>
+              {busy === "save" ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />} 保存设置
+            </button>
+          </div>
+
+          {instance.loader !== "vanilla" && (
+            <section className="manager-section">
+              <h4>加载器安装</h4>
+              <div className="inline-field">
+                <input
+                  value={loaderVersion}
+                  onChange={(event) => setLoaderVersion(event.target.value)}
+                  placeholder={`${loaderLabel(instance.loader)} 版本，例如 0.16.0 / 47.4.0`}
+                />
+                <button className="ghost-button" onClick={() => void installLoader()} disabled={busy === "loader"}>
+                  {busy === "loader" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} 自动安装
+                </button>
+              </div>
+              <p className="security-note">
+                Fabric / Legacy Fabric / Forge / NeoForge / Cleanroom 使用官方无头安装器；OptiFine、LabyMod、LiteLoader 请手动导入。
+              </p>
+              {installLog && <pre className="installer-log">{installLog}</pre>}
+            </section>
+          )}
+
+          <section className="manager-section">
+            <h4>整合包与世界</h4>
+            <div className="manager-actions">
+              <button className="ghost-button" onClick={() => void importPack()} disabled={busy === "pack"}>
+                {busy === "pack" ? <LoaderCircle className="spin" size={15} /> : <PackageOpen size={15} />} 导入整合包
+              </button>
+              <button className="ghost-button" onClick={() => void importWorld()} disabled={busy === "world"}>
+                {busy === "world" ? <LoaderCircle className="spin" size={15} /> : <Globe2 size={15} />} 导入世界
+              </button>
+              <button className="ghost-button" onClick={() => void exportPack()} disabled={busy === "export"}>
+                {busy === "export" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} 导出整合包
+              </button>
+            </div>
+            <p className="security-note">
+              支持 .mrpack 与 CurseForge zip 导入；导出为 .mrpack，本地 mod 放入 overrides/mods。
+            </p>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LogPanel({ instanceId, onClose }: { instanceId: string; onClose: () => void }) {
+  const [lines, setLines] = useState<string[]>([]);
+  const [status, setStatus] = useState("idle");
+  const endRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    void api.instanceLog(instanceId).then(setLines).catch(() => undefined);
+    void api.launchStatus(instanceId).then(setStatus).catch(() => undefined);
+    const unlistenLog = listen<{ instance_id: string; line: string }>("game-log", (event) => {
+      if (event.payload.instance_id !== instanceId) return;
+      setLines((current) => [...current, event.payload.line].slice(-1000));
+    });
+    const unlistenExit = listen<{ instance_id: string; code?: number | null }>("game-exit", (event) => {
+      if (event.payload.instance_id !== instanceId) return;
+      setStatus("exited");
+      setLines((current) => [...current, `[Aurora] 进程退出，代码 ${event.payload.code ?? "-"}`]);
+    });
+    return () => {
+      void unlistenLog.then((fn) => fn());
+      void unlistenExit.then((fn) => fn());
+    };
+  }, [instanceId]);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [lines]);
+
+  return (
+    <section className="log-panel">
+      <header className="log-head">
+        <div>
+          <span className="eyebrow">GAME LOG · {status}</span>
+          <strong>游戏控制台</strong>
+        </div>
+        <div className="log-actions">
+          <button
+            className="ghost-button"
+            onClick={() => {
+              void api.instanceLog(instanceId).then(setLines).catch(() => undefined);
+            }}
+          >
+            <RefreshCw size={15} /> 刷新
+          </button>
+          <button
+            className="ghost-button"
+            onClick={() => {
+              void api.killInstance(instanceId).catch(() => undefined);
+            }}
+          >
+            停止
+          </button>
+          <button className="icon-button" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+      </header>
+      <div className="log-lines">
+        {lines.length === 0 && <p className="security-note">暂无日志，启动游戏后会在这里显示。</p>}
+        {lines.map((line, index) => (
+          <div className="log-line" key={`${index}-${line.slice(0, 12)}`}>{line}</div>
+        ))}
+        <div ref={endRef} />
+      </div>
+    </section>
   );
 }
 
@@ -1374,6 +1685,7 @@ function Loaders({
   onNotice,
   onOpenExternal,
   onCreate,
+  onRefresh,
 }: {
   focus: LoaderId;
   setFocus: (id: LoaderId) => void;
@@ -1383,12 +1695,14 @@ function Loaders({
   onNotice: (message: string) => void;
   onOpenExternal: (url: string) => void;
   onCreate: () => void;
+  onRefresh: () => Promise<void>;
 }) {
   const active = instances.find((item) => item.id === activeId);
   const [gameVersion, setGameVersion] = useState("");
   const [catalog, setCatalog] = useState<LoaderCatalog | null>(null);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null);
+  const [installing, setInstalling] = useState<string | null>(null);
   const [targetId, setTargetId] = useState(activeId || instances[0]?.id || "");
   const effectiveVersion = gameVersion || active?.minecraft_version || manifest?.latest_release || "1.21.1";
   const target = instances.find((item) => item.id === targetId) ?? instances[0];
@@ -1451,6 +1765,25 @@ function Loaders({
       onNotice(String(error));
     } finally {
       setDownloading(null);
+    }
+  };
+
+  const autoLoader = ["fabric", "legacyfabric", "forge", "neoforge", "cleanroom"].includes(focus);
+
+  const installVersion = async (version: string) => {
+    if (!target) {
+      onNotice("请先创建一个实例作为安装目标");
+      return;
+    }
+    setInstalling(version);
+    try {
+      const result = await api.installLoader(target.id, focus, version);
+      await onRefresh();
+      onNotice(`加载器安装完成：${result.version_id}`);
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setInstalling(null);
     }
   };
 
@@ -1538,14 +1871,26 @@ function Loaders({
                   <strong>{version}</strong>
                   <small>{catalog?.name} · {effectiveVersion}</small>
                 </div>
-                <button
-                  className="ghost-button"
-                  disabled={downloading === version || !installerUrl(version)}
-                  onClick={() => void downloadInstaller(version)}
-                >
-                  {downloading === version ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}
-                  下载安装器
-                </button>
+                <div className="loader-version-actions">
+                  <button
+                    className="ghost-button"
+                    disabled={downloading === version || !installerUrl(version)}
+                    onClick={() => void downloadInstaller(version)}
+                  >
+                    {downloading === version ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}
+                    下载安装器
+                  </button>
+                  {autoLoader && (
+                    <button
+                      className="primary-button"
+                      disabled={installing === version || !target}
+                      onClick={() => void installVersion(version)}
+                    >
+                      {installing === version ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}
+                      安装到实例
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -1578,17 +1923,39 @@ function SettingsPage({
   const [key, setKey] = useState("");
   const [proxy, setProxy] = useState(settings.proxy);
   const [sakuraEnabled, setSakuraEnabled] = useState(settings.sakura_enabled);
-  const [busy, setBusy] = useState(false);
+  const [sharedGameDir, setSharedGameDir] = useState(settings.shared_game_dir);
+  const [downloadSource, setDownloadSource] = useState(settings.download_source || "official");
+  const [msClientId, setMsClientId] = useState(settings.ms_client_id);
+  const [accounts, setAccounts] = useState<AccountView[]>([]);
+  const [offlineName, setOfflineName] = useState("");
+  const [deviceCode, setDeviceCode] = useState<DeviceCode | null>(null);
+  const [pollMessage, setPollMessage] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState("");
+
+  const loadAccounts = async () => {
+    try {
+      setAccounts(await api.accounts());
+    } catch (error) {
+      onNotice(String(error));
+    }
+  };
 
   useEffect(() => {
     setProxy(settings.proxy);
     setSakuraEnabled(settings.sakura_enabled);
+    setSharedGameDir(settings.shared_game_dir);
+    setDownloadSource(settings.download_source || "official");
+    setMsClientId(settings.ms_client_id);
   }, [settings]);
 
+  useEffect(() => {
+    void loadAccounts();
+  }, []);
+
   const saveKey = async () => {
-    setBusy(true);
+    setBusy("key");
     try {
       await api.setCurseForgeKey(key);
       setKey("");
@@ -1597,7 +1964,7 @@ function SettingsPage({
     } catch (error) {
       onNotice(String(error));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -1629,11 +1996,74 @@ function SettingsPage({
     onNotice("网络设置已保存");
   };
 
+  const saveDownload = async () => {
+    await onSave({
+      ...settings,
+      download_source: downloadSource,
+      shared_game_dir: sharedGameDir.trim(),
+    });
+    onNotice("下载与共享目录设置已保存");
+  };
+
+  const chooseSharedDir = async () => {
+    const path = await api.pickFolder();
+    if (path) setSharedGameDir(path);
+  };
+
+  const saveMsClient = async () => {
+    await onSave({ ...settings, ms_client_id: msClientId.trim() });
+    onNotice("微软 Client ID 已保存");
+  };
+
   const toggleSakura = async (enabled: boolean) => {
     setSakuraEnabled(enabled);
     await onSave({ ...settings, sakura_enabled: enabled });
     if (enabled) {
       await onRefreshSakura();
+    }
+  };
+
+  const addOffline = async () => {
+    setBusy("offline");
+    try {
+      await api.addOfflineAccount(offlineName.trim());
+      setOfflineName("");
+      await loadAccounts();
+      onNotice("离线账户已添加并设为当前账户");
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const startMsLogin = async () => {
+    setBusy("ms");
+    setPollMessage("");
+    try {
+      setDeviceCode(await api.msStartLogin());
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const pollMsLogin = async () => {
+    if (!deviceCode) return;
+    setBusy("poll");
+    try {
+      const result = await api.msPollLogin(deviceCode.device_code);
+      setPollMessage(result.message);
+      if (result.status === "success") {
+        setDeviceCode(null);
+        await loadAccounts();
+        onNotice("微软账户登录成功");
+      }
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -1671,10 +2101,91 @@ function SettingsPage({
           <button className="ghost-button" onClick={() => void clearKey()} disabled={!info?.curseforge_configured}>
             移除本地 Key
           </button>
-          <button className="primary-button" onClick={() => void saveKey()} disabled={busy || key.trim().length < 20}>
-            {busy ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />} 保存 Key
+          <button className="primary-button" onClick={() => void saveKey()} disabled={busy === "key" || key.trim().length < 20}>
+            {busy === "key" ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />} 保存 Key
           </button>
         </div>
+      </section>
+
+      <section className="settings-card">
+        <div className="settings-heading">
+          <div className="setting-icon">
+            <Gamepad2 size={22} />
+          </div>
+          <div>
+            <h3>账户</h3>
+            <p>微软正版登录使用设备码流程；需要你自己的 Azure 公共客户端 Client ID。</p>
+          </div>
+        </div>
+        <label className="field-label">
+          Azure Client ID
+          <div className="inline-field">
+            <input
+              value={msClientId}
+              onChange={(event) => setMsClientId(event.target.value)}
+              placeholder="在 Azure 应用注册中创建公共客户端后填写"
+              spellCheck={false}
+            />
+            <button className="ghost-button" onClick={() => void saveMsClient()}>保存</button>
+          </div>
+        </label>
+        <p className="security-note">
+          注册时选择“移动和桌面应用”，启用“允许公共客户端流”，并在 API 权限中加入 Minecraft。不要把密码或密钥发到对话里。
+        </p>
+        <div className="account-list">
+          {accounts.length === 0 && <p className="security-note">还没有账户；未添加时会以离线身份 Player 启动。</p>}
+          {accounts.map((account) => (
+            <div className={`account-row ${account.active ? "active" : ""}`} key={account.id}>
+              <div>
+                <strong>{account.name}</strong>
+                <small>{account.kind === "microsoft" ? "微软正版" : "离线"} · {account.uuid}</small>
+              </div>
+              {account.active ? (
+                <span className="pill mini">当前</span>
+              ) : (
+                <button
+                  className="ghost-button"
+                  onClick={() => {
+                    void api.setActiveAccount(account.id).then(loadAccounts).catch((error) => onNotice(String(error)));
+                  }}
+                >
+                  切换
+                </button>
+              )}
+              <button
+                className="danger-button"
+                onClick={() => {
+                  void api.removeAccount(account.id).then(loadAccounts).catch((error) => onNotice(String(error)));
+                }}
+              >
+                <Trash2 size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="inline-field">
+          <input
+            value={offlineName}
+            onChange={(event) => setOfflineName(event.target.value)}
+            placeholder="离线用户名（1-16 位字母数字）"
+          />
+          <button className="ghost-button" onClick={() => void addOffline()} disabled={busy === "offline"}>
+            <Plus size={15} /> 添加离线账户
+          </button>
+          <button className="primary-button" onClick={() => void startMsLogin()} disabled={busy === "ms"}>
+            {busy === "ms" ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />} 微软登录
+          </button>
+        </div>
+        {deviceCode && (
+          <div className="device-code">
+            <p>在浏览器打开 <strong>{deviceCode.verification_uri}</strong>，输入代码：</p>
+            <div className="user-code">{deviceCode.user_code}</div>
+            <button className="ghost-button" onClick={() => void pollMsLogin()} disabled={busy === "poll"}>
+              {busy === "poll" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} 我已完成授权，检查状态
+            </button>
+            {pollMessage && <p className="security-note">{pollMessage}</p>}
+          </div>
+        )}
       </section>
 
       <section className="settings-card">
@@ -1708,6 +2219,46 @@ function SettingsPage({
           </button>
         </div>
         {testResult && <div className="inline-note">{testResult}</div>}
+      </section>
+
+      <section className="settings-card">
+        <div className="settings-heading">
+          <div className="setting-icon network">
+            <Download size={22} />
+          </div>
+          <div>
+            <h3>下载与共享目录</h3>
+            <p>游戏文件默认下载到实例 game 目录；共享目录只复用只读的 assets、libraries 与 vanilla 版本。</p>
+          </div>
+        </div>
+        <label className="field-label">
+          下载源
+          <select value={downloadSource} onChange={(event) => setDownloadSource(event.target.value)}>
+            <option value="official">Mojang 官方</option>
+            <option value="bmclapi">BMCLAPI 国内镜像</option>
+            <option value="auto">自动（官方优先，失败回退镜像）</option>
+          </select>
+        </label>
+        <label className="field-label">
+          共享游戏目录（可选）
+          <div className="inline-field">
+            <input
+              value={sharedGameDir}
+              onChange={(event) => setSharedGameDir(event.target.value)}
+              placeholder="例如 F:\\.xmcl 或 F:\\.minecraft"
+              spellCheck={false}
+            />
+            <button className="ghost-button" onClick={() => void chooseSharedDir()}>浏览</button>
+          </div>
+        </label>
+        <div className="settings-actions">
+          <button className="primary-button" onClick={() => void saveDownload()}>
+            <Check size={17} /> 保存下载设置
+          </button>
+        </div>
+        <p className="security-note">
+          共享目录用于已存在的官方游戏文件，避免重复下载数 GB 的 assets；实例的 mods、saves、config、logs 仍完全隔离。不填则每个实例独立下载。
+        </p>
       </section>
 
       <section className="settings-card">

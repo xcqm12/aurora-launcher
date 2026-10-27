@@ -55,6 +55,18 @@ jobs:
           Copy-Item "${{ matrix.output_dir }}/aurora-launcher.exe" "staging/aurora-launcher-${{ matrix.variant }}.exe"
           Copy-Item "${{ matrix.output_dir }}/bundle/nsis/*.exe" "staging/aurora-launcher-${{ matrix.variant }}-setup.exe"
 
+      - name: Sign Windows artifacts (optional)
+        if: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "codesign.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+          $files = Get-ChildItem staging -Filter *.exe | ForEach-Object { $_.FullName }
+          ./scripts/sign-windows.ps1 -Path $files -Pfx $pfx -PfxPassword $env:PFX_PASSWORD
+
       - uses: actions/upload-artifact@v4
         with:
           name: aurora-${{ matrix.variant }}

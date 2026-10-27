@@ -1,12 +1,19 @@
+mod auth;
+mod launch;
+mod loaders;
+mod packs;
+
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
+    sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[derive(Debug, Serialize)]
 struct AppInfo {
@@ -19,7 +26,7 @@ struct AppInfo {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct Instance {
+pub(crate) struct Instance {
     id: String,
     name: String,
     minecraft_version: String,
@@ -33,6 +40,8 @@ struct Instance {
     memory_mb: u32,
     #[serde(default)]
     created_at: u64,
+    #[serde(default)]
+    launch_version_id: Option<String>,
 }
 
 fn default_memory() -> u32 {
@@ -40,11 +49,19 @@ fn default_memory() -> u32 {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct AppSettings {
+pub(crate) struct AppSettings {
     #[serde(default)]
-    proxy: String,
+    pub(crate) proxy: String,
     #[serde(default)]
-    sakura_enabled: bool,
+    pub(crate) sakura_enabled: bool,
+    #[serde(default)]
+    pub(crate) shared_game_dir: String,
+    #[serde(default)]
+    pub(crate) download_source: String,
+    #[serde(default)]
+    pub(crate) ms_client_id: String,
+    #[serde(default)]
+    pub(crate) active_account: String,
 }
 
 impl Default for AppSettings {
@@ -52,6 +69,10 @@ impl Default for AppSettings {
         Self {
             proxy: String::new(),
             sakura_enabled: false,
+            shared_game_dir: String::new(),
+            download_source: "official".into(),
+            ms_client_id: String::new(),
+            active_account: String::new(),
         }
     }
 }
@@ -130,7 +151,7 @@ struct CurseForgeFile {
     sha1: Option<String>,
 }
 
-fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
 }
 
@@ -142,7 +163,7 @@ fn settings_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir(app)?.join("settings.json"))
 }
 
-fn read_settings(app: &tauri::AppHandle) -> AppSettings {
+pub(crate) fn read_settings(app: &tauri::AppHandle) -> AppSettings {
     let Ok(path) = settings_file(app) else {
         return AppSettings::default();
     };
@@ -152,7 +173,7 @@ fn read_settings(app: &tauri::AppHandle) -> AppSettings {
         .unwrap_or_default()
 }
 
-fn write_settings(app: &tauri::AppHandle, settings: &AppSettings) -> Result<(), String> {
+pub(crate) fn write_settings(app: &tauri::AppHandle, settings: &AppSettings) -> Result<(), String> {
     let dir = data_dir(app)?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = settings_file(app)?;
@@ -179,7 +200,7 @@ fn normalized_proxy(value: &str) -> Result<String, String> {
 
 fn build_client(proxy: &str) -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
-        .user_agent("AuroraLauncher/0.3")
+        .user_agent("AuroraLauncher/0.4")
         .timeout(Duration::from_secs(45))
         .connect_timeout(Duration::from_secs(15));
     let proxy = normalized_proxy(proxy)?;
@@ -190,11 +211,11 @@ fn build_client(proxy: &str) -> Result<reqwest::Client, String> {
     builder.build().map_err(|e| e.to_string())
 }
 
-fn http_client(app: &tauri::AppHandle) -> Result<reqwest::Client, String> {
+pub(crate) fn http_client(app: &tauri::AppHandle) -> Result<reqwest::Client, String> {
     build_client(&read_settings(app).proxy)
 }
 
-fn unix_now() -> u64 {
+pub(crate) fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -228,14 +249,14 @@ fn region_blocked() -> bool {
     region_lock_enabled() && current_region().as_deref() == Some("CN")
 }
 
-fn ensure_download_allowed() -> Result<(), String> {
+pub(crate) fn ensure_download_allowed() -> Result<(), String> {
     if region_blocked() {
         return Err("此发行版在你所在地区不提供资源下载".into());
     }
     Ok(())
 }
 
-fn write_instance_meta(instance: &Instance) -> Result<(), String> {
+pub(crate) fn write_instance_meta(instance: &Instance) -> Result<(), String> {
     let root = PathBuf::from(&instance.directory);
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let path = root.join("instance.json");
@@ -248,7 +269,7 @@ fn write_instance_meta(instance: &Instance) -> Result<(), String> {
     fs::rename(tmp, path).map_err(|e| e.to_string())
 }
 
-fn read_instances(app: &tauri::AppHandle) -> Result<Vec<Instance>, String> {
+pub(crate) fn read_instances(app: &tauri::AppHandle) -> Result<Vec<Instance>, String> {
     let path = instances_file(app)?;
     if !path.exists() {
         return Ok(Vec::new());
@@ -257,7 +278,10 @@ fn read_instances(app: &tauri::AppHandle) -> Result<Vec<Instance>, String> {
     serde_json::from_str(&text).map_err(|e| e.to_string())
 }
 
-fn write_instances(app: &tauri::AppHandle, instances: &[Instance]) -> Result<(), String> {
+pub(crate) fn write_instances(
+    app: &tauri::AppHandle,
+    instances: &[Instance],
+) -> Result<(), String> {
     let dir = data_dir(app)?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = instances_file(app)?;
@@ -287,7 +311,7 @@ fn secret_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir(app)?.join("curseforge.key"))
 }
 
-fn curseforge_key(app: &tauri::AppHandle) -> Result<String, String> {
+pub(crate) fn curseforge_key(app: &tauri::AppHandle) -> Result<String, String> {
     if let Ok(key) = std::env::var("CURSEFORGE_API_KEY") {
         if !key.trim().is_empty() {
             return Ok(key);
@@ -309,7 +333,7 @@ fn curseforge_key(app: &tauri::AppHandle) -> Result<String, String> {
 }
 
 #[cfg(windows)]
-fn dpapi_encrypt(value: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn dpapi_encrypt(value: &str) -> Result<Vec<u8>, String> {
     use std::{ffi::c_void, ptr};
     #[repr(C)]
     struct Blob {
@@ -362,7 +386,7 @@ fn dpapi_encrypt(value: &str) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(windows)]
-fn dpapi_decrypt(value: &[u8]) -> Result<String, String> {
+pub(crate) fn dpapi_decrypt(value: &[u8]) -> Result<String, String> {
     use std::{ffi::c_void, ptr};
     #[repr(C)]
     struct Blob {
@@ -532,6 +556,7 @@ fn create_instance(
         java_path: None,
         memory_mb: default_memory(),
         created_at: unix_now(),
+        launch_version_id: None,
     };
     write_instance_meta(&instance)?;
     let mut all = read_instances(&app)?;
@@ -774,7 +799,7 @@ async fn search_modrinth(
         request = request.query(&[("facets", format!("[[\"versions:{}\"]]", version))]);
     }
     let response: serde_json::Value = request
-        .header("User-Agent", "AuroraLauncher/0.3 (launcher)")
+        .header("User-Agent", "AuroraLauncher/0.4 (launcher)")
         .send()
         .await
         .map_err(|e| e.to_string())?
@@ -848,7 +873,7 @@ async fn search_curseforge(
         request = request.query(&[("classId", c.to_string())]);
     }
     let response = request
-        .header("User-Agent", "AuroraLauncher/0.3")
+        .header("User-Agent", "AuroraLauncher/0.4")
         .send()
         .await
         .map_err(|e| format!("CurseForge 请求失败：{e}"))?;
@@ -928,7 +953,7 @@ async fn curseforge_files(
         request = request.query(&[("modLoaderType", loader.to_string())]);
     }
     let response = request
-        .header("User-Agent", "AuroraLauncher/0.3")
+        .header("User-Agent", "AuroraLauncher/0.4")
         .send()
         .await
         .map_err(|e| format!("CurseForge 文件请求失败：{e}"))?;
@@ -1006,7 +1031,7 @@ async fn curseforge_files(
         .collect())
 }
 
-fn instance_root(app: &tauri::AppHandle, instance_id: &str) -> Result<PathBuf, String> {
+pub(crate) fn instance_root(app: &tauri::AppHandle, instance_id: &str) -> Result<PathBuf, String> {
     let instance = read_instances(app)?
         .into_iter()
         .find(|item| item.id == instance_id)
@@ -1033,7 +1058,7 @@ fn instance_install_dir(
     Ok(instance_root(app, instance_id)?.join(folder))
 }
 
-fn safe_filename(value: &str) -> Option<String> {
+pub(crate) fn safe_filename(value: &str) -> Option<String> {
     let name = PathBuf::from(value)
         .file_name()?
         .to_string_lossy()
@@ -1100,7 +1125,7 @@ async fn verified_curseforge_bytes(
     Ok(bytes.to_vec())
 }
 
-fn write_atomic(target: &PathBuf, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_atomic(target: &Path, bytes: &[u8]) -> Result<(), String> {
     let tmp = target.with_extension("aurora.part");
     fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
     fs::rename(&tmp, target).map_err(|e| e.to_string())
@@ -1241,7 +1266,7 @@ async fn modrinth_versions(
         request = request.query(&[("loaders", format!("[\"{}\"]", l))]);
     }
     let values: Vec<serde_json::Value> = request
-        .header("User-Agent", "AuroraLauncher/0.3 (launcher)")
+        .header("User-Agent", "AuroraLauncher/0.4 (launcher)")
         .send()
         .await
         .map_err(|e| e.to_string())?
@@ -1328,6 +1353,14 @@ fn save_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), Str
         &AppSettings {
             proxy,
             sakura_enabled: settings.sakura_enabled,
+            shared_game_dir: settings.shared_game_dir.trim().to_string(),
+            download_source: match settings.download_source.as_str() {
+                "bmclapi" => "bmclapi".into(),
+                "auto" => "auto".into(),
+                _ => "official".into(),
+            },
+            ms_client_id: settings.ms_client_id.trim().to_string(),
+            active_account: settings.active_account,
         },
     )
 }
@@ -1739,7 +1772,7 @@ async fn curseforge_discover(
         request = request.header("x-api-key", curseforge_key(app)?);
     }
     let response = request
-        .header("User-Agent", "AuroraLauncher/0.3")
+        .header("User-Agent", "AuroraLauncher/0.4")
         .send()
         .await
         .map_err(|e| format!("CurseForge 请求失败：{e}"))?;
@@ -2228,6 +2261,318 @@ async fn download_loader_installer(
     Ok(target.display().to_string())
 }
 
+#[derive(Clone, Default)]
+struct LaunchState {
+    logs: Arc<Mutex<HashMap<String, Vec<String>>>>,
+    status: Arc<Mutex<HashMap<String, String>>>,
+    pids: Arc<Mutex<HashMap<String, u32>>>,
+}
+
+impl LaunchState {
+    fn set_status(&self, instance_id: &str, value: &str) {
+        if let Ok(mut status) = self.status.lock() {
+            status.insert(instance_id.to_string(), value.to_string());
+        }
+    }
+
+    fn push_log(&self, instance_id: &str, line: &str) {
+        if let Ok(mut logs) = self.logs.lock() {
+            let entry = logs.entry(instance_id.to_string()).or_default();
+            if entry.len() < 2000 {
+                entry.push(line.to_string());
+            }
+        }
+    }
+}
+
+#[derive(Clone, serde::Serialize)]
+struct GameLogPayload {
+    instance_id: String,
+    line: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct GameExitPayload {
+    instance_id: String,
+    code: Option<i32>,
+}
+
+#[tauri::command]
+fn get_launch_status(state: tauri::State<'_, LaunchState>, instance_id: String) -> String {
+    state
+        .status
+        .lock()
+        .ok()
+        .and_then(|status| status.get(&instance_id).cloned())
+        .unwrap_or_else(|| "idle".into())
+}
+
+#[tauri::command]
+fn get_instance_log(state: tauri::State<'_, LaunchState>, instance_id: String) -> Vec<String> {
+    state
+        .logs
+        .lock()
+        .ok()
+        .and_then(|logs| logs.get(&instance_id).cloned())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+async fn launch_instance(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, LaunchState>,
+    instance_id: String,
+) -> Result<String, String> {
+    ensure_download_allowed()?;
+    let instance = read_instances(&app)?
+        .into_iter()
+        .find(|item| item.id == instance_id)
+        .ok_or_else(|| "实例不存在".to_string())?;
+    let settings = read_settings(&app);
+    let account = auth::launch_account(&app).await?;
+    let instance_dir = PathBuf::from(&instance.directory);
+    let game_dir = instance_dir.join("game");
+    let shared_root = if settings.shared_game_dir.trim().is_empty() {
+        None
+    } else {
+        let path = PathBuf::from(settings.shared_game_dir.trim());
+        if !path.exists() {
+            return Err(format!("共享游戏目录不存在：{}", path.display()));
+        }
+        Some(path)
+    };
+    let assets_root = shared_root
+        .as_ref()
+        .map(|root| root.join("assets"))
+        .unwrap_or_else(|| game_dir.join("assets"));
+    let libraries_root = game_dir.join("libraries");
+    let version_id = instance
+        .launch_version_id
+        .clone()
+        .unwrap_or_else(|| instance.minecraft_version.clone());
+    let context = launch::LaunchContext {
+        instance_dir: instance_dir.clone(),
+        game_dir,
+        assets_root,
+        libraries_root,
+        shared_root,
+        version_id,
+        java: instance.java_path.clone().map(PathBuf::from),
+        memory_mb: instance.memory_mb,
+        username: account.name,
+        uuid: account.uuid,
+        access_token: account.access_token,
+        user_type: account.user_type,
+        client_id: account.client_id,
+        xuid: account.xuid,
+        download_source: settings.download_source,
+        proxy: settings.proxy,
+    };
+    state.set_status(&instance_id, "preparing");
+    state.push_log(&instance_id, "[Aurora] 开始准备启动文件");
+    let report_state = state.inner().clone();
+    let report_app = app.clone();
+    let report_id = instance_id.clone();
+    let report = move |message: &str| {
+        report_state.push_log(&report_id, message);
+        let _ = report_app.emit(
+            "game-log",
+            GameLogPayload {
+                instance_id: report_id.clone(),
+                line: message.to_string(),
+            },
+        );
+    };
+    let prepared = launch::prepare(&context, &report).await?;
+    state.push_log(&instance_id, "[Aurora] 启动 Java 进程");
+    let line_state = state.inner().clone();
+    let line_app = app.clone();
+    let line_id = instance_id.clone();
+    let on_line = Arc::new(move |line: String| {
+        line_state.push_log(&line_id, &line);
+        let _ = line_app.emit(
+            "game-log",
+            GameLogPayload {
+                instance_id: line_id.clone(),
+                line,
+            },
+        );
+    });
+    let exit_state = state.inner().clone();
+    let exit_app = app.clone();
+    let exit_id = instance_id.clone();
+    let on_exit = Arc::new(move |code: Option<i32>| {
+        exit_state.set_status(&exit_id, "exited");
+        if let Ok(mut pids) = exit_state.pids.lock() {
+            pids.remove(&exit_id);
+        }
+        let _ = exit_app.emit(
+            "game-exit",
+            GameExitPayload {
+                instance_id: exit_id.clone(),
+                code,
+            },
+        );
+    });
+    let pid = launch::spawn(&prepared, on_line, on_exit)?;
+    if let Ok(mut pids) = state.pids.lock() {
+        pids.insert(instance_id.clone(), pid);
+    }
+    state.set_status(&instance_id, "running");
+    Ok(pid.to_string())
+}
+
+#[tauri::command]
+fn kill_instance(state: tauri::State<'_, LaunchState>, instance_id: String) -> Result<(), String> {
+    let pid = state
+        .pids
+        .lock()
+        .ok()
+        .and_then(|pids| pids.get(&instance_id).copied())
+        .ok_or_else(|| "没有正在运行的游戏进程".to_string())?;
+    Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .output()
+        .map_err(|e| format!("结束进程失败：{e}"))?;
+    state.set_status(&instance_id, "stopped");
+    Ok(())
+}
+
+#[tauri::command]
+async fn install_loader(
+    app: tauri::AppHandle,
+    instance_id: String,
+    loader: String,
+    version: String,
+) -> Result<loaders::LoaderInstallResult, String> {
+    loaders::install(app, instance_id, loader, version).await
+}
+
+#[tauri::command]
+async fn import_instance_pack(
+    app: tauri::AppHandle,
+    instance_id: String,
+    path: String,
+) -> Result<packs::ImportResult, String> {
+    packs::import_pack(app, instance_id, path).await
+}
+
+#[tauri::command]
+fn import_instance_world(
+    app: tauri::AppHandle,
+    instance_id: String,
+    path: String,
+) -> Result<String, String> {
+    packs::import_world(app, instance_id, path)
+}
+
+#[tauri::command]
+fn export_instance_pack(
+    app: tauri::AppHandle,
+    instance_id: String,
+    path: String,
+) -> Result<String, String> {
+    packs::export_pack(app, instance_id, path)
+}
+
+#[tauri::command]
+fn pick_pack_file() -> Option<String> {
+    packs::pick_pack()
+}
+
+#[tauri::command]
+fn pick_world_file() -> Option<String> {
+    packs::pick_world()
+}
+
+#[tauri::command]
+fn pick_export_file(default_name: String) -> Option<String> {
+    packs::pick_export(&default_name)
+}
+
+#[tauri::command]
+fn pick_folder() -> Option<String> {
+    packs::pick_folder()
+}
+
+#[tauri::command]
+fn pick_java_file() -> Option<String> {
+    rfd::FileDialog::new()
+        .add_filter("Java", &["exe"])
+        .pick_file()
+        .map(|path| path.display().to_string())
+}
+
+#[tauri::command]
+fn list_accounts(app: tauri::AppHandle) -> Vec<auth::AccountView> {
+    auth::list(&app)
+}
+
+#[tauri::command]
+fn add_offline_account(app: tauri::AppHandle, name: String) -> Result<auth::AccountView, String> {
+    auth::add_offline(&app, &name)
+}
+
+#[tauri::command]
+fn set_active_account(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    auth::set_active(&app, &id)
+}
+
+#[tauri::command]
+fn remove_account(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    auth::remove(&app, &id)
+}
+
+#[tauri::command]
+async fn ms_start_login(app: tauri::AppHandle) -> Result<auth::DeviceCode, String> {
+    auth::start_login(&app).await
+}
+
+#[tauri::command]
+async fn ms_poll_login(
+    app: tauri::AppHandle,
+    device_code: String,
+) -> Result<auth::PollResult, String> {
+    auth::poll_login(&app, &device_code).await
+}
+
+pub fn smoke_launch(
+    shared_root: &str,
+    version_id: &str,
+    java: &str,
+    username: &str,
+    seconds: u64,
+) -> Result<String, String> {
+    let shared = PathBuf::from(shared_root);
+    if !shared.exists() {
+        return Err("共享目录不存在".into());
+    }
+    let temp = std::env::temp_dir().join(format!("aurora-smoke-{}", unix_now()));
+    let instance_dir = temp.join("instance");
+    let game_dir = instance_dir.join("game");
+    fs::create_dir_all(&game_dir).map_err(|e| e.to_string())?;
+    let context = launch::LaunchContext {
+        instance_dir: instance_dir.clone(),
+        game_dir: game_dir.clone(),
+        assets_root: shared.join("assets"),
+        libraries_root: game_dir.join("libraries"),
+        shared_root: Some(shared),
+        version_id: version_id.into(),
+        java: Some(PathBuf::from(java)),
+        memory_mb: 2048,
+        username: username.into(),
+        uuid: auth::offline_uuid(username),
+        access_token: "0".into(),
+        user_type: "legacy".into(),
+        client_id: String::new(),
+        xuid: String::new(),
+        download_source: "official".into(),
+        proxy: String::new(),
+    };
+    let result = tauri::async_runtime::block_on(launch::smoke(&context, seconds));
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2357,6 +2702,7 @@ pub fn run() {
     load_local_env();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(LaunchState::default())
         .invoke_handler(tauri::generate_handler![
             app_info,
             set_curseforge_key,
@@ -2384,7 +2730,26 @@ pub fn run() {
             download_curseforge_file,
             install_modrinth_file,
             download_modrinth_file,
-            modrinth_versions
+            modrinth_versions,
+            get_launch_status,
+            get_instance_log,
+            launch_instance,
+            kill_instance,
+            install_loader,
+            import_instance_pack,
+            import_instance_world,
+            export_instance_pack,
+            pick_pack_file,
+            pick_world_file,
+            pick_export_file,
+            pick_folder,
+            pick_java_file,
+            list_accounts,
+            add_offline_account,
+            set_active_account,
+            remove_account,
+            ms_start_login,
+            ms_poll_login
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aurora Launcher");

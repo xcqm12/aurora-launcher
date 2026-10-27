@@ -1509,3 +1509,187 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+.modal.wide {
+  width: 680px;
+}
+
+.two-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.inline-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inline-field input {
+  flex: 1;
+  min-width: 0;
+}
+
+.manager-section {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #233049;
+}
+
+.manager-section h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.manager-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.installer-log {
+  max-height: 160px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #233049;
+  border-radius: 8px;
+  background: #0b1220;
+  color: #9fb0c9;
+  font: 10px/1.5 var(--mono);
+  white-space: pre-wrap;
+}
+
+.log-panel {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 35;
+  display: flex;
+  flex-direction: column;
+  width: min(700px, 90vw);
+  height: min(430px, 70vh);
+  overflow: hidden;
+  border: 1px solid #33405d;
+  border-radius: 14px;
+  background: rgba(9, 14, 24, 0.94);
+  box-shadow: 0 20px 60px #000a;
+  backdrop-filter: blur(10px);
+}
+
+.log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #233049;
+}
+
+.log-head strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.log-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.log-lines {
+  flex: 1;
+  padding: 10px 14px;
+  overflow-y: auto;
+  color: #a9b7cc;
+  font: 10px/1.55 var(--mono);
+}
+
+.log-line {
+  padding: 2px 0;
+  border-bottom: 1px solid #141e30;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.account-list {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.account-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #233049;
+  border-radius: 10px;
+  background: #0d1524;
+}
+
+.account-row.active {
+  border-color: #6bcaaa;
+}
+
+.account-row > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-row strong,
+.account-row small {
+  display: block;
+}
+
+.account-row strong {
+  font-size: 12px;
+}
+
+.account-row small {
+  margin-top: 3px;
+  color: #77849a;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.device-code {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #33405d;
+  border-radius: 10px;
+  background: #101a2b;
+}
+
+.device-code p {
+  margin: 0 0 6px;
+  color: #b7c3d8;
+  font-size: 11px;
+}
+
+.user-code {
+  margin: 8px 0;
+  color: var(--accent);
+  font: 20px var(--mono);
+  letter-spacing: 4px;
+}
+
+.settings-card select {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid #2d3a54;
+  border-radius: 9px;
+  outline: none;
+  background: #0d1524;
+  color: #edf3ff;
+  font-size: 12px;
+}
+
+.loader-version-actions {
+  display: flex;
+  gap: 6px;
+}

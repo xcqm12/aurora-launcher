@@ -1,4 +1,11 @@
-# Aurora Launcher v0.4.0
+# Aurora Launcher v0.4.1
+
+- 微软登录修正：MC 令牌过期时间、所有权检查、XErr 映射、uhs 校验、access token DPAPI 加密。
+- 设备码自动打开浏览器、复制代码、自动轮询与 slow_down/过期处理。
+- 构建时可通过 `AURORA_MS_CLIENT_ID` 注入 Client ID；仍不内置第三方 ID。
+- Worker 支持 `/aurora` 路径前缀，预置 `qlmtest.dpdns.org/aurora/*` 路由（未部署）。
+
+# Aurora Launcher v0.4.0（历史）
 
 ## 核心更新
 

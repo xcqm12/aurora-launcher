@@ -2041,7 +2041,10 @@ function SettingsPage({
     setBusy("ms");
     setPollMessage("");
     try {
-      setDeviceCode(await api.msStartLogin());
+      const code = await api.msStartLogin();
+      setDeviceCode(code);
+      void api.openExternal(code.verification_uri).catch(() => undefined);
+      void navigator.clipboard?.writeText(code.user_code).catch(() => undefined);
     } catch (error) {
       onNotice(String(error));
     } finally {
@@ -2065,6 +2068,52 @@ function SettingsPage({
     } finally {
       setBusy(null);
     }
+  };
+
+  useEffect(() => {
+    if (!deviceCode) return;
+    let cancelled = false;
+    let delay = Math.max(5, deviceCode.interval) * 1000;
+    let elapsed = 0;
+    let timer = 0;
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const result = await api.msPollLogin(deviceCode.device_code);
+        if (cancelled) return;
+        setPollMessage(result.message);
+        if (result.status === "success") {
+          setDeviceCode(null);
+          await loadAccounts();
+          onNotice("微软账户登录成功");
+          return;
+        }
+        if (result.status === "slow_down") {
+          delay += 5000;
+        }
+        if (["expired", "declined", "error"].includes(result.status)) {
+          return;
+        }
+      } catch (error) {
+        if (!cancelled) setPollMessage(String(error));
+      }
+      elapsed += delay;
+      if (elapsed > deviceCode.expires_in * 1000) {
+        setPollMessage("设备码已过期，请重新点击微软登录");
+        return;
+      }
+      timer = window.setTimeout(() => void tick(), delay);
+    };
+    timer = window.setTimeout(() => void tick(), delay);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [deviceCode?.device_code]);
+
+  const sysOpen = async () => {
+    if (!deviceCode) return;
+    await api.openExternal(deviceCode.verification_uri).catch((error) => onNotice(String(error)));
   };
 
   return (
@@ -2178,11 +2227,31 @@ function SettingsPage({
         </div>
         {deviceCode && (
           <div className="device-code">
-            <p>在浏览器打开 <strong>{deviceCode.verification_uri}</strong>，输入代码：</p>
+            <p>
+              浏览器已自动打开；若没有，请访问 <strong>{deviceCode.verification_uri}</strong> 并输入代码：
+            </p>
             <div className="user-code">{deviceCode.user_code}</div>
-            <button className="ghost-button" onClick={() => void pollMsLogin()} disabled={busy === "poll"}>
-              {busy === "poll" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} 我已完成授权，检查状态
-            </button>
+            <div className="settings-actions">
+              <button
+                className="ghost-button"
+                onClick={() => {
+                  void navigator.clipboard
+                    ?.writeText(deviceCode.user_code)
+                    .then(() => onNotice("代码已复制"))
+                    .catch(() => onNotice("复制失败，请手动选择代码"));
+                }}
+              >
+                复制代码
+              </button>
+              <button className="ghost-button" onClick={() => void sysOpen()} disabled={busy === "poll"}>
+                <ExternalLink size={15} /> 重新打开网页
+              </button>
+              <button className="ghost-button" onClick={() => void pollMsLogin()} disabled={busy === "poll"}>
+                {busy === "poll" ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />} 立即检查
+              </button>
+              <button className="ghost-button" onClick={() => setDeviceCode(null)}>取消登录</button>
+            </div>
+            <p className="security-note">代码约 15 分钟内有效；登录完成后会自动完成 Xbox 与 Minecraft 认证。</p>
             {pollMessage && <p className="security-note">{pollMessage}</p>}
           </div>
         )}

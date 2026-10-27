@@ -2,6 +2,15 @@
 
 Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板。
 
+## 0.4.1 更新内容
+
+- 微软登录对齐 PCL2 / HMCL：使用 Minecraft 令牌的真实 `expires_in`（约 24h）而不是微软令牌的 1h；新增 `/entitlements/mcstore` 所有权检查与档案 404 的许可证判断。
+- 补全 XSTS `XErr` 映射（封禁、无 Xbox 档案、地区不支持、儿童账户），校验 Xbox 与 XSTS 的 `uhs` 一致；MC 登录 429/403/503 与封禁有明确提示。
+- MC access token 改为 DPAPI 加密后落盘（离线 token 除外）；刷新令牌失效时返回“请重新登录”，不静默成功。
+- 设备码 UX 对齐 PCL2：自动打开浏览器、复制代码、按 `interval` 自动轮询、处理 `slow_down`、过期/拒绝停止；保留手动检查。
+- 构建时可从 `AURORA_MS_CLIENT_ID` 注入 Client ID（GitHub Secret），运行时设置仍可覆盖；不内置任何第三方 Client ID。
+- Worker 增加 `PATH_PREFIX`，`wrangler.toml` 预置 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.1 资产源；尚未部署。
+
 ## 0.4.0 更新内容
 
 - **游戏启动**：解析版本 JSON（含 `inheritsFrom` 继承）、下载 client jar/libraries/asset index/objects、解压 natives、构建 classpath 与 JVM/游戏参数、选择 Java、启动进程、实时日志与停止。
@@ -81,8 +90,8 @@ npm run bundle:cn
 发布：
 
 ```powershell
-git tag v0.4.0
-git push origin v0.4.0
+git tag v0.4.1
+git push origin v0.4.1
 ```
 
 CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并创建 GitHub Release。

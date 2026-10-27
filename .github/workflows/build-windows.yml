@@ -47,6 +47,8 @@ jobs:
 
       - name: Build ${{ matrix.variant }} installer
         run: node scripts/build-variant.mjs ${{ matrix.variant }}
+        env:
+          AURORA_MS_CLIENT_ID: ${{ secrets.AURORA_MS_CLIENT_ID }}
 
       - name: Collect artifacts
         shell: pwsh

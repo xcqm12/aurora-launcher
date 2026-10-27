@@ -28,8 +28,13 @@ export default {
     if (!env.ORIGIN_BASE) {
       return new Response("ORIGIN_BASE is not configured.", { status: 500 });
     }
+    const prefix = env.PATH_PREFIX || "/aurora";
+    let pathname = url.pathname;
+    if (prefix && pathname.startsWith(prefix)) {
+      pathname = pathname.slice(prefix.length) || "/";
+    }
     const origin = new URL(env.ORIGIN_BASE);
-    const target = new URL(url.pathname + url.search, origin);
+    const target = new URL(pathname + url.search, origin);
     const headers = new Headers(request.headers);
     headers.delete("host");
     const response = await fetch(target, {

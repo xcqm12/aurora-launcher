@@ -996,7 +996,7 @@ pub async fn prepare(
     );
     placeholders.insert("natives_directory", natives.clone());
     placeholders.insert("launcher_name", "Aurora".into());
-    placeholders.insert("launcher_version", "0.4.0".into());
+    placeholders.insert("launcher_version", "0.4.1".into());
     placeholders.insert("classpath", classpath.clone());
     placeholders.insert("classpath_separator", ";".into());
     placeholders.insert("library_directory", libraries_dir.clone());
@@ -1034,7 +1034,7 @@ pub async fn prepare(
         .iter()
         .any(|arg| arg.starts_with("-Dminecraft.launcher.version="))
     {
-        args.push("-Dminecraft.launcher.version=0.4.0".into());
+        args.push("-Dminecraft.launcher.version=0.4.1".into());
     }
     if let Some(logging) = version
         .logging

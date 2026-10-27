@@ -2,8 +2,9 @@
 
 Windows 优先的 Minecraft 启动器原型，Rust + Tauri 2 + React 19。界面按 PCL 风格重做：左侧资源/安装包分类、顶部搜索与版本/加载器筛选、自动预加载热门列表、纵向资源列表、文件安装抽屉与滚轮滚动。
 
-## 0.2.0 更新内容
+## 0.3.0 更新内容
 
+- 相对 0.2.0：樱花主题“换一张”手动刷新；资源收藏本地保存；实例卡显示独立目录路径；全部请求复用统一 HTTP 客户端并走设置页代理；修复 CI 先测试后构建前端的顺序问题。
 - 资源页重构为 PCL 风格：左侧分类、来源/排序/版本/加载器筛选、热门列表自动预加载、分页加载更多。
 - 模组、光影、资源包、整合包、数据包、世界均可在空搜索时自动拉取列表；文件面板显示全部可安装文件。
 - Modrinth 安装支持 SHA-512/SHA-1 校验；CurseForge 安装支持 SHA-1 与官方 CDN 白名单。
@@ -59,7 +60,8 @@ Windows 优先的 Minecraft 启动器原型，Rust + Tauri 2 + React 19。界面
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.2.0>
+- Release v0.3.0：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.3.0>
+- Release v0.2.0：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.2.0>
 
 ## 开发与构建
 
@@ -80,8 +82,8 @@ npm run bundle:cn        # target/cn/release/bundle/nsis
 CI 在 tag `v*` 时构建两个变体、生成 SHA-256 并发布 GitHub Release：
 
 ```powershell
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 ## 代理与地区限制
@@ -92,8 +94,8 @@ git push origin v0.2.0
 
 ## 发布产物
 
-- `Aurora-Launcher-0.2.0-standard-x64-setup.exe`
-- `Aurora-Launcher-0.2.0-cn-restricted-x64-setup.exe`
+- `Aurora-Launcher-0.3.0-standard-x64-setup.exe`
+- `Aurora-Launcher-0.3.0-cn-restricted-x64-setup.exe`
 - 对应便携版 EXE 与 `SHA256SUMS.txt`
 
 安装包未签名，首次运行可能出现 SmartScreen 提示。

@@ -179,7 +179,7 @@ fn normalized_proxy(value: &str) -> Result<String, String> {
 
 fn build_client(proxy: &str) -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
-        .user_agent("AuroraLauncher/0.2")
+        .user_agent("AuroraLauncher/0.3")
         .timeout(Duration::from_secs(45))
         .connect_timeout(Duration::from_secs(15));
     let proxy = normalized_proxy(proxy)?;
@@ -774,7 +774,7 @@ async fn search_modrinth(
         request = request.query(&[("facets", format!("[[\"versions:{}\"]]", version))]);
     }
     let response: serde_json::Value = request
-        .header("User-Agent", "AuroraLauncher/0.1 (launcher)")
+        .header("User-Agent", "AuroraLauncher/0.3 (launcher)")
         .send()
         .await
         .map_err(|e| e.to_string())?
@@ -848,7 +848,7 @@ async fn search_curseforge(
         request = request.query(&[("classId", c.to_string())]);
     }
     let response = request
-        .header("User-Agent", "AuroraLauncher/0.1")
+        .header("User-Agent", "AuroraLauncher/0.3")
         .send()
         .await
         .map_err(|e| format!("CurseForge 请求失败：{e}"))?;
@@ -928,7 +928,7 @@ async fn curseforge_files(
         request = request.query(&[("modLoaderType", loader.to_string())]);
     }
     let response = request
-        .header("User-Agent", "AuroraLauncher/0.1")
+        .header("User-Agent", "AuroraLauncher/0.3")
         .send()
         .await
         .map_err(|e| format!("CurseForge 文件请求失败：{e}"))?;
@@ -1241,7 +1241,7 @@ async fn modrinth_versions(
         request = request.query(&[("loaders", format!("[\"{}\"]", l))]);
     }
     let values: Vec<serde_json::Value> = request
-        .header("User-Agent", "AuroraLauncher/0.1 (launcher)")
+        .header("User-Agent", "AuroraLauncher/0.3 (launcher)")
         .send()
         .await
         .map_err(|e| e.to_string())?
@@ -1739,7 +1739,7 @@ async fn curseforge_discover(
         request = request.header("x-api-key", curseforge_key(app)?);
     }
     let response = request
-        .header("User-Agent", "AuroraLauncher/0.2")
+        .header("User-Agent", "AuroraLauncher/0.3")
         .send()
         .await
         .map_err(|e| format!("CurseForge 请求失败：{e}"))?;

@@ -6,11 +6,24 @@ and streams the asset from `ORIGIN_BASE`.
 
 ## Deploy
 
-1. Upload the installers to an origin you control (R2 public bucket, S3, etc.).
-2. Set `ORIGIN_BASE` and `BLOCKED_COUNTRIES` in `wrangler.toml`.
-3. `npx wrangler deploy`.
-4. Publish the Worker URLs (not the raw GitHub asset URLs) as the restricted
-   download links.
+1. Set `ORIGIN_BASE` and `BLOCKED_COUNTRIES` in `wrangler.toml`. The shipped
+   config proxies `qlmtest.dpdns.org/aurora/*` to the v0.4.1 GitHub Release
+   assets, so no separate origin is required.
+2. Authenticate wrangler with a **scoped API token** (Workers Scripts:Edit,
+   Zone Workers Routes:Edit, DNS:Edit, Zone:Read for the zone) — a Global API
+   Key also needs `CLOUDFLARE_EMAIL` and grants full account access, so it is
+   not recommended. Then run `npx wrangler deploy`.
+3. Publish `https://qlmtest.dpdns.org/aurora/<asset>` URLs (not the raw GitHub
+   asset URLs) as the restricted download links.
+
+Local verification without an account:
+
+```bash
+node --input-type=module -e "import('./src/index.js').then(async ({default: worker}) => { let target=''; globalThis.fetch = async (url) => { target = url; return new Response('asset', {status:200}); }; const env = { BLOCKED_COUNTRIES: 'CN', PATH_PREFIX: '/aurora', ORIGIN_BASE: 'https://github.com/xcqm12/aurora-launcher/releases/download/v0.4.1/' }; const req = (c) => ({url:'https://qlmtest.dpdns.org/aurora/Aurora-Launcher-0.4.1-standard-x64-setup.exe',method:'GET',headers:new Headers(),body:null,cf:{country:c}}); console.log('CN', (await worker.fetch(req('CN'), env)).status); console.log('SG', (await worker.fetch(req('SG'), env)).status, target); });"
+```
+
+Expected: CN returns 403, SG returns 200 and the fetch target is the release
+asset URL.
 
 ## Limits
 

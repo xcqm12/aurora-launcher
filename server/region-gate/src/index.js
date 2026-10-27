@@ -34,7 +34,9 @@ export default {
       pathname = pathname.slice(prefix.length) || "/";
     }
     const origin = new URL(env.ORIGIN_BASE);
-    const target = new URL(pathname + url.search, origin);
+    const basePath = origin.pathname.endsWith("/") ? origin.pathname : `${origin.pathname}/`;
+    const relative = pathname.replace(/^\/+/, "");
+    const target = new URL(`${origin.origin}${basePath}${relative}${url.search}`);
     const headers = new Headers(request.headers);
     headers.delete("host");
     const response = await fetch(target, {

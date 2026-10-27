@@ -115,4 +115,41 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.1>
+
+## 微软登录（对齐 PCL2 / HMCL）
+
+流程与 PCL2（设备码）和 HMCL（设备码/授权码）一致：`consumers` 租户 + `XboxLive.signin offline_access`，设备码 → Xbox Live → XSTS → Minecraft → 所有权 → 档案。
+
+对齐后的行为：
+
+- 过期时间使用 Minecraft 令牌的 `expires_in`（约 24 小时，提前 30 秒视为过期），不再用微软令牌的 1 小时。
+- 调用 `/entitlements/mcstore` 检查所有权；档案 404 时再查 `/entitlements/license` 区分“有游戏无档案”与“无许可证”。
+- XSTS `XErr` 完整映射：封禁 / 无 Xbox 档案 / 地区不支持 / 儿童账户；校验 Xbox 与 XSTS 的 `uhs` 一致。
+- MC 登录 429/403/503 与 `ACCOUNT_SUSPENDED` 有明确提示；刷新失败返回“凭据已过期，请重新登录”。
+- 设备码自动打开浏览器并复制代码，按 `interval` 自动轮询，处理 `slow_down`（+5s）、过期、拒绝；保留手动“立即检查”。
+- MC access token 与刷新令牌均 DPAPI 加密落盘；日志不打印任何令牌。
+
+Client ID 配置（三选一，均不内置第三方 ID）：
+
+1. 设置页填写（保存到 settings.json）。
+2. 环境变量 `AURORA_MS_CLIENT_ID`。
+3. 构建时注入：GitHub Secret `AURORA_MS_CLIENT_ID`，CI 传入 `--env`，编译进二进制（`option_env!`）。
+
+Azure 注册要点：应用类型选“移动和桌面应用”，启用“允许公共客户端流”，不填客户端密钥；在 API 权限中加入 Minecraft 所需权限（新应用需向 Microsoft 申请）。
+
+## Cloudflare 锁区网关（qlmtest.dpdns.org）
+
+- 域名已托管在 Cloudflare（NS：fred/magali.ns.cloudflare.com），是独立 zone，不是 dpdns.org 的子记录。
+- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.1 Release 资产回源，`PATH_PREFIX=/aurora`。
+- 本地已验证：CN 请求 403，其他地区 200 且回源到正确的 Release 资产 URL。
+- **尚未部署**：需要 Cloudflare 凭据。你提供的 32 位 Key 是 Global API Key（需配邮箱、全账号权限，不推荐），建议在 Cloudflare 面板创建 Scoped Token（Workers Scripts:Edit、Zone Workers Routes:Edit、DNS:Edit、Zone:Read，范围限 qlmtest.dpdns.org），然后：
+
+```powershell
+$env:CLOUDFLARE_API_TOKEN = "<token>"
+npx wrangler login   # 或直接用上面的 token
+npx wrangler deploy
+```
+
+- 部署后，锁区下载链接为 `https://qlmtest.dpdns.org/aurora/<文件名>`；GitHub Release 原链接仍公开，真正强制必须只发网关链接。
+- 若使用 Global API Key，需同时提供账号邮箱（`CLOUDFLARE_EMAIL`），并自行承担全账号权限风险；用后建议在面板轮换该 Key。

@@ -150,6 +150,61 @@ fn poll_error(error: &str, description: &str) -> PollResult {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct ClientIdCheck {
+    pub ok: bool,
+    pub message: String,
+}
+
+fn normalize_client_id(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    let bytes = trimmed.as_bytes();
+    let valid = bytes.len() == 36
+        && bytes.iter().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => *byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        });
+    if !valid {
+        return Err("Client ID 格式不正确，应为 36 位 GUID（8-4-4-4-12）".into());
+    }
+    Ok(trimmed.to_string())
+}
+
+pub async fn check_client_id(
+    app: &tauri::AppHandle,
+    value: &str,
+) -> Result<ClientIdCheck, String> {
+    let client_id = normalize_client_id(value)?;
+    let client = http_client(app)?;
+    let response = client
+        .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode")
+        .query(&[("mkt", "zh-CN")])
+        .header("Accept-Language", "zh-CN")
+        .form(&[
+            ("client_id", client_id.as_str()),
+            ("scope", "XboxLive.signin offline_access"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("验证 Client ID 失败：{e}"))?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(ClientIdCheck {
+            ok: true,
+            message: "Client ID 可用：支持个人账户的设备码登录。能否读取 Minecraft 档案取决于该应用是否已通过 Mojang 审核，这一步只能在实际登录时验证。".into(),
+        });
+    }
+    let value: serde_json::Value = response.json().await.unwrap_or_default();
+    let description = value
+        .get("error_description")
+        .and_then(|item| item.as_str())
+        .unwrap_or_default();
+    Ok(ClientIdCheck {
+        ok: false,
+        message: device_code_error(status.as_u16(), description),
+    })
+}
+
 fn accounts_file(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(data_dir(app)?.join("accounts.json"))
 }
@@ -808,6 +863,17 @@ mod tests {
 
         let unapproved = device_code_error(404, "");
         assert!(unapproved.contains("aka.ms/mce-reviewappid"));
+    }
+
+    #[test]
+    fn client_id_must_be_a_guid() {
+        assert_eq!(
+            normalize_client_id(" 11111111-1111-1111-1111-111111111111 ").unwrap(),
+            "11111111-1111-1111-1111-111111111111"
+        );
+        assert!(normalize_client_id("11111111-1111-1111-1111-11111111111").is_err());
+        assert!(normalize_client_id("zzzz1111-1111-1111-1111-111111111111").is_err());
+        assert!(normalize_client_id("").is_err());
     }
 
     #[test]

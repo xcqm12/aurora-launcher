@@ -127,6 +127,7 @@ export type PollResult = {
   terminal: boolean;
   hint?: string | null;
 };
+export type ClientIdCheck = { ok: boolean; message: string };
 export type LoaderInstallResult = { version_id: string; installer: string; log: string };
 export type ImportResult = {
   kind: string;
@@ -227,4 +228,5 @@ export const api = {
   removeAccount: (id: string) => invoke<void>("remove_account", { id }),
   msStartLogin: () => invoke<DeviceCode>("ms_start_login"),
   msPollLogin: (deviceCode: string) => invoke<PollResult>("ms_poll_login", { deviceCode }),
+  msCheckClientId: (clientId: string) => invoke<ClientIdCheck>("ms_check_client_id", { clientId }),
 };

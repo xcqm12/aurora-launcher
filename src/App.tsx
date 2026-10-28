@@ -1931,6 +1931,8 @@ function SettingsPage({
   const [deviceCode, setDeviceCode] = useState<DeviceCode | null>(null);
   const [pollMessage, setPollMessage] = useState("");
   const [pollHint, setPollHint] = useState<string | null>(null);
+  const [checkingClient, setCheckingClient] = useState(false);
+  const [clientCheck, setClientCheck] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState("");
@@ -2014,6 +2016,31 @@ function SettingsPage({
   const saveMsClient = async () => {
     await onSave({ ...settings, ms_client_id: msClientId.trim() });
     onNotice("微软 Client ID 已保存");
+  };
+
+  const checkMsClient = async () => {
+    setCheckingClient(true);
+    setClientCheck("");
+    try {
+      const result = await api.msCheckClientId(msClientId);
+      setClientCheck(result.message);
+    } catch (error) {
+      setClientCheck(String(error));
+    } finally {
+      setCheckingClient(false);
+    }
+  };
+
+  const openReview = async () => {
+    await api
+      .openExternal("https://aka.ms/AppRegInfo")
+      .catch((error) => onNotice(String(error)));
+  };
+
+  const openAzureApps = async () => {
+    await api
+      .openExternal("https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade")
+      .catch((error) => onNotice(String(error)));
   };
 
   const toggleSakura = async (enabled: boolean) => {
@@ -2186,11 +2213,25 @@ function SettingsPage({
               spellCheck={false}
             />
             <button className="ghost-button" onClick={() => void saveMsClient()}>保存</button>
+            <button className="ghost-button" onClick={() => void checkMsClient()} disabled={checkingClient}>
+              {checkingClient ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />} 验证
+            </button>
           </div>
         </label>
         <p className="security-note">
-          注册时选择“移动和桌面应用”，启用“允许公共客户端流”，并在 API 权限中加入 Minecraft。不要把密码或密钥发到对话里。
+          账户类型选“个人 Microsoft 账户”，添加 Web 平台重定向 https://www.microsoft.com/link
+          并允许公共客户端流；通过 Mojang 应用审核后才能读取 Minecraft 档案。审核材料见
+          docs/mce-review-application.md。
         </p>
+        <div className="settings-actions">
+          <button className="ghost-button" onClick={() => void openAzureApps()}>
+            <ExternalLink size={15} /> Azure 应用注册
+          </button>
+          <button className="ghost-button" onClick={() => void openReview()}>
+            <ExternalLink size={15} /> Minecraft 应用审核
+          </button>
+        </div>
+        {clientCheck && <p className="security-note">{clientCheck}</p>}
         <div className="account-list">
           {accounts.length === 0 && <p className="security-note">还没有账户；未添加时会以离线身份 Player 启动。</p>}
           {accounts.map((account) => (

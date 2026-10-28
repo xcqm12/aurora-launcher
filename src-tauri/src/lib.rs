@@ -2536,6 +2536,14 @@ async fn ms_poll_login(
     auth::poll_login(&app, &device_code).await
 }
 
+#[tauri::command]
+async fn ms_check_client_id(
+    app: tauri::AppHandle,
+    client_id: String,
+) -> Result<auth::ClientIdCheck, String> {
+    auth::check_client_id(&app, &client_id).await
+}
+
 pub fn smoke_launch(
     shared_root: &str,
     version_id: &str,
@@ -2749,7 +2757,8 @@ pub fn run() {
             set_active_account,
             remove_account,
             ms_start_login,
-            ms_poll_login
+            ms_poll_login,
+            ms_check_client_id
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aurora Launcher");

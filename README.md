@@ -1,6 +1,13 @@
 # Aurora Launcher
 
-Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程《微软 OAuth 登录》对齐设备码流程细节。
+Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南。
+
+## 0.4.3 更新内容
+
+- 设置页新增“验证”按钮：检查 Client ID 格式是否为 GUID，并用它请求一次设备码，提前发现应用不存在、账户类型错误、未启用公共客户端流等问题（不能替代 Mojang 审核）。
+- 设置页新增“Azure 应用注册”“Minecraft 应用审核”直达按钮，说明文字改为 Web 平台重定向 + 公共客户端流 + 审核要求。
+- 新增 `docs/mce-review-application.md`：申请材料清单、英文申请模板、常见拒绝原因，以及为什么不能借用 PCL2/HMCL 等他人已审核的 Client ID。
+- 明确一条产品边界：不内置、不提取、不冒用任何第三方 Azure Client ID。
 
 ## 0.4.2 更新内容
 
@@ -145,7 +152,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.2>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.3>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）
 
@@ -188,6 +195,14 @@ Azure 注册要点（按教程顺序）：
 | `no_license` | 账户没有 Java 版所有权或 Game Pass 过期，界面按钮可跳转商店。 |
 | `no_profile` | 有游戏但没有 Java 档案，先到 minecraft.net 创建用户名。 |
 | `XErr 2148916233` | 微软账户没有 Xbox 档案，先到 xbox.com 创建。 |
+
+### Mojang 应用审核
+
+未获 Mojang 批准的 Client ID，即使微软登录成功，也可能在 `login_with_xbox` 或档案查询阶段被拒（社区报告为 403 `Invalid app registration` / 404）。官方入口：<https://aka.ms/AppRegInfo>（当前跳转 Mojang 帮助文章），旧表单：<https://aka.ms/mce-reviewappid>。
+
+- 申请材料、英文模板与常见拒绝原因见 [docs/mce-review-application.md](docs/mce-review-application.md)。
+- 设置页“验证”只检查 Client ID 是否能走个人账户设备码流程，**不代表**已过 Minecraft 审核；审核结果只有在完整登录拉取档案时才体现。
+- 不内置、不提取、不冒用 PCL2/HMCL 等他人已审核的 Client ID：Client ID 是应用身份，冒用违反微软条款，也可能连累对方应用被撤销。
 
 ## Cloudflare 锁区网关（qlmtest.dpdns.org）
 

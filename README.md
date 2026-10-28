@@ -1,6 +1,14 @@
 # Aurora Launcher
 
-Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板。
+Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程《微软 OAuth 登录》对齐设备码流程细节。
+
+## 0.4.2 更新内容
+
+- 设备码请求追加 `?mkt=zh-CN` 与 `Accept-Language: zh-CN`，错误描述由微软本地化返回。
+- 设备码失败按 AADSTS 码给出修复建议：700016（应用不存在/账户类型不符）、7000218/7000215（未启用公共客户端流）、700005（权限不足）、404（未过 Minecraft 应用审核，附 aka.ms/mce-reviewappid）。
+- 轮询状态新增 `terminal` 标记：除 `pending`/`slow_down` 外全部停止自动轮询；`expired_token`、`bad_verification_code`、`invalid_client` 有独立状态与中文提示，不再反复轮询已消耗的设备码。
+- 无所有权/无许可证返回 `no_license`，设置页显示“打开 Minecraft 商店”按钮；支持 `verification_uri_complete` 直接打开带代码的登录页。
+- README 补充 Azure 注册要点与失败排查表。
 
 ## 0.4.1 更新内容
 
@@ -115,11 +123,11 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.1>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.2>
 
-## 微软登录（对齐 PCL2 / HMCL）
+## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）
 
-流程与 PCL2（设备码）和 HMCL（设备码/授权码）一致：`consumers` 租户 + `XboxLive.signin offline_access`，设备码 → Xbox Live → XSTS → Minecraft → 所有权 → 档案。
+流程与 PCL2（设备码）、HMCL（设备码/授权码）以及 lmaml 教程第二章一致：`consumers` 租户 + `XboxLive.signin offline_access`，设备码 → Xbox Live → XSTS → Minecraft → 所有权 → 档案。
 
 对齐后的行为：
 
@@ -127,7 +135,8 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 - 调用 `/entitlements/mcstore` 检查所有权；档案 404 时再查 `/entitlements/license` 区分“有游戏无档案”与“无许可证”。
 - XSTS `XErr` 完整映射：封禁 / 无 Xbox 档案 / 地区不支持 / 儿童账户；校验 Xbox 与 XSTS 的 `uhs` 一致。
 - MC 登录 429/403/503 与 `ACCOUNT_SUSPENDED` 有明确提示；刷新失败返回“凭据已过期，请重新登录”。
-- 设备码自动打开浏览器并复制代码，按 `interval` 自动轮询，处理 `slow_down`（+5s）、过期、拒绝；保留手动“立即检查”。
+- 设备码请求带 `mkt=zh-CN`；自动打开浏览器并复制代码，按 `interval` 自动轮询，`slow_down` 加 5 秒，过期/拒绝/设备码复用立即停止。
+- 无许可证时返回 `no_license`，界面提供“打开 Minecraft 商店”；有游戏但无档案时提示先创建档案。
 - MC access token 与刷新令牌均 DPAPI 加密落盘；日志不打印任何令牌。
 
 Client ID 配置（三选一，均不内置第三方 ID）：
@@ -136,12 +145,32 @@ Client ID 配置（三选一，均不内置第三方 ID）：
 2. 环境变量 `AURORA_MS_CLIENT_ID`。
 3. 构建时注入：GitHub Secret `AURORA_MS_CLIENT_ID`，CI 传入 `--env`，编译进二进制（`option_env!`）。
 
-Azure 注册要点：应用类型选“移动和桌面应用”，启用“允许公共客户端流”，不填客户端密钥；在 API 权限中加入 Minecraft 所需权限（新应用需向 Microsoft 申请）。
+Azure 注册要点（按教程顺序）：
+
+1. 账户类型选“任何组织目录中的账户和个人 Microsoft 账户”。只选组织账户会在 `consumers` 端点返回 `AADSTS700016`。
+2. “身份验证”里添加平台 **Web**，重定向 URI 填 `https://www.microsoft.com/link`；打开“允许公共客户端流”。不要创建客户端密钥。
+3. “品牌与属性”中应用名称、徽标、说明为必填，否则可能注册失败。
+4. API 权限加 `XboxLive.signin`、`offline_access`（委托权限，无需管理员同意）。
+5. 未通过审核的 Client ID 可能直接返回 404，可在 <https://aka.ms/mce-reviewappid> 提交应用审核。
+6. 公开分发的启动器不要把 Client ID 硬编码进仓库，用上面的 Secret 注入方式。
+
+登录失败排查：
+
+| 现象 | 原因与处理 |
+| --- | --- |
+| 设置页提示“未配置微软 Client ID” | 三处都为空：设置页、`AURORA_MS_CLIENT_ID`、构建注入。 |
+| `AADSTS700016` | Client ID 拼错，或应用账户类型不含个人账户。 |
+| `AADSTS7000218` / `7000215` | 未启用“允许公共客户端流”，或缺少 Web 平台。 |
+| HTTP 404 | Client ID 未过 Minecraft 应用审核，去 aka.ms/mce-reviewappid 申请。 |
+| `bad_verification_code` | 设备码已被使用或换了 Client ID，重新点击登录。 |
+| `no_license` | 账户没有 Java 版所有权或 Game Pass 过期，界面按钮可跳转商店。 |
+| `no_profile` | 有游戏但没有 Java 档案，先到 minecraft.net 创建用户名。 |
+| `XErr 2148916233` | 微软账户没有 Xbox 档案，先到 xbox.com 创建。 |
 
 ## Cloudflare 锁区网关（qlmtest.dpdns.org）
 
 - 域名已托管在 Cloudflare（NS：fred/magali.ns.cloudflare.com），是独立 zone，不是 dpdns.org 的子记录。
-- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.1 Release 资产回源，`PATH_PREFIX=/aurora`。
+- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.2 Release 资产回源，`PATH_PREFIX=/aurora`。
 - 本地已验证：CN 请求 403，其他地区 200 且回源到正确的 Release 资产 URL。
 - **尚未部署**：需要 Cloudflare 凭据。你提供的 32 位 Key 是 Global API Key（需配邮箱、全账号权限，不推荐），建议在 Cloudflare 面板创建 Scoped Token（Workers Scripts:Edit、Zone Workers Routes:Edit、DNS:Edit、Zone:Read，范围限 qlmtest.dpdns.org），然后：
 

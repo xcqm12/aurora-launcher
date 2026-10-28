@@ -1930,6 +1930,7 @@ function SettingsPage({
   const [offlineName, setOfflineName] = useState("");
   const [deviceCode, setDeviceCode] = useState<DeviceCode | null>(null);
   const [pollMessage, setPollMessage] = useState("");
+  const [pollHint, setPollHint] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState("");
@@ -2040,10 +2041,13 @@ function SettingsPage({
   const startMsLogin = async () => {
     setBusy("ms");
     setPollMessage("");
+    setPollHint(null);
     try {
       const code = await api.msStartLogin();
       setDeviceCode(code);
-      void api.openExternal(code.verification_uri).catch(() => undefined);
+      void api
+        .openExternal(code.verification_uri_complete || code.verification_uri)
+        .catch(() => undefined);
       void navigator.clipboard?.writeText(code.user_code).catch(() => undefined);
     } catch (error) {
       onNotice(String(error));
@@ -2058,8 +2062,10 @@ function SettingsPage({
     try {
       const result = await api.msPollLogin(deviceCode.device_code);
       setPollMessage(result.message);
+      setPollHint(result.hint ?? null);
       if (result.status === "success") {
         setDeviceCode(null);
+        setPollHint(null);
         await loadAccounts();
         onNotice("微软账户登录成功");
       }
@@ -2082,8 +2088,10 @@ function SettingsPage({
         const result = await api.msPollLogin(deviceCode.device_code);
         if (cancelled) return;
         setPollMessage(result.message);
+        setPollHint(result.hint ?? null);
         if (result.status === "success") {
           setDeviceCode(null);
+          setPollHint(null);
           await loadAccounts();
           onNotice("微软账户登录成功");
           return;
@@ -2091,7 +2099,7 @@ function SettingsPage({
         if (result.status === "slow_down") {
           delay += 5000;
         }
-        if (["expired", "declined", "error"].includes(result.status)) {
+        if (result.terminal) {
           return;
         }
       } catch (error) {
@@ -2113,7 +2121,9 @@ function SettingsPage({
 
   const sysOpen = async () => {
     if (!deviceCode) return;
-    await api.openExternal(deviceCode.verification_uri).catch((error) => onNotice(String(error)));
+    await api
+      .openExternal(deviceCode.verification_uri_complete || deviceCode.verification_uri)
+      .catch((error) => onNotice(String(error)));
   };
 
   return (
@@ -2253,6 +2263,16 @@ function SettingsPage({
             </div>
             <p className="security-note">代码约 15 分钟内有效；登录完成后会自动完成 Xbox 与 Minecraft 认证。</p>
             {pollMessage && <p className="security-note">{pollMessage}</p>}
+            {pollHint && (
+              <button
+                className="ghost-button"
+                onClick={() =>
+                  void api.openExternal(pollHint).catch((error) => onNotice(String(error)))
+                }
+              >
+                <ExternalLink size={15} /> 打开 Minecraft 商店
+              </button>
+            )}
           </div>
         )}
       </section>

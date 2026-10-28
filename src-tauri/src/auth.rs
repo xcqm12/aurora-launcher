@@ -45,6 +45,8 @@ pub struct DeviceCode {
     pub device_code: String,
     pub user_code: String,
     pub verification_uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_uri_complete: Option<String>,
     pub expires_in: u64,
     pub interval: u64,
     pub message: String,
@@ -55,6 +57,95 @@ pub struct PollResult {
     pub status: String,
     pub account: Option<AccountView>,
     pub message: String,
+    pub terminal: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+const STORE_URL: &str = "https://www.minecraft.net/zh-hans/store/minecraft-java-edition";
+
+struct LoginFailure {
+    status: &'static str,
+    message: String,
+    hint: Option<String>,
+}
+
+impl LoginFailure {
+    fn new(status: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+            hint: None,
+        }
+    }
+
+    fn with_hint(mut self, hint: &str) -> Self {
+        self.hint = Some(hint.to_string());
+        self
+    }
+}
+
+impl From<String> for LoginFailure {
+    fn from(message: String) -> Self {
+        Self::new("error", message)
+    }
+}
+
+impl From<&str> for LoginFailure {
+    fn from(message: &str) -> Self {
+        Self::new("error", message)
+    }
+}
+
+fn device_code_error(status: u16, description: &str) -> String {
+    let hint = if description.contains("AADSTS700016") {
+        "应用不存在：请确认 Client ID 没有填错，且账户类型支持“个人 Microsoft 账户”。"
+    } else if description.contains("AADSTS7000218") || description.contains("AADSTS7000215") {
+        "应用未启用公共客户端：Azure 门户 → 身份验证 → 允许公共客户端流，或添加 Web 平台重定向 https://www.microsoft.com/link 。"
+    } else if description.contains("AADSTS700005") {
+        "授权被拒绝：请确认应用已添加 XboxLive.signin 与 offline_access 权限。"
+    } else if status == 404 {
+        "微软返回 404，通常是该 Client ID 未通过 Minecraft 应用审核；可在 https://aka.ms/mce-reviewappid 提交审核。"
+    } else {
+        "请检查 Client ID、应用的账户类型以及“允许公共客户端流”设置。"
+    };
+    format!("无法获取设备码（HTTP {status}）：{hint}")
+}
+
+fn poll_error(error: &str, description: &str) -> PollResult {
+    let (status, message) = match error {
+        "authorization_pending" => ("pending", "等待你在浏览器中完成微软登录…".to_string()),
+        "slow_down" => ("slow_down", "轮询过快，已自动降低检查频率".to_string()),
+        "authorization_declined" => ("declined", "你在浏览器中取消了微软登录授权".to_string()),
+        "expired_token" => ("expired", "设备码已过期，请重新点击“微软登录”".to_string()),
+        "bad_verification_code" => {
+            let message = if description.is_empty() {
+                "设备码无效或已被使用，请重新发起登录".to_string()
+            } else {
+                format!("设备码无效或已被使用，请重新发起登录（{description}）")
+            };
+            ("invalid_code", message)
+        }
+        "invalid_client" | "unauthorized_client" => (
+            "client_error",
+            "Client ID 无效，或应用未启用设备码/公共客户端流程".to_string(),
+        ),
+        _ => {
+            let message = if description.is_empty() {
+                error.to_string()
+            } else {
+                format!("{error}：{description}")
+            };
+            ("error", message)
+        }
+    };
+    PollResult {
+        status: status.into(),
+        account: None,
+        message,
+        terminal: !matches!(status, "pending" | "slow_down"),
+        hint: None,
+    }
 }
 
 fn accounts_file(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
@@ -246,6 +337,8 @@ pub async fn start_login(app: &tauri::AppHandle) -> Result<DeviceCode, String> {
     let client = http_client(app)?;
     let response = client
         .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode")
+        .query(&[("mkt", "zh-CN")])
+        .header("Accept-Language", "zh-CN")
         .form(&[
             ("client_id", client_id.as_str()),
             ("scope", "XboxLive.signin offline_access"),
@@ -253,19 +346,25 @@ pub async fn start_login(app: &tauri::AppHandle) -> Result<DeviceCode, String> {
         .send()
         .await
         .map_err(|e| format!("微软登录请求失败：{e}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "微软设备码接口返回 HTTP {}，请检查 Client ID 是否为公共客户端",
-            response.status().as_u16()
-        ));
-    }
-    let value: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-    Ok(DeviceCode {
-        device_code: value
-            .get("device_code")
+    let status = response.status();
+    let value: serde_json::Value = response.json().await.unwrap_or_default();
+    if !status.is_success() {
+        let description = value
+            .get("error_description")
             .and_then(|item| item.as_str())
-            .unwrap_or_default()
-            .into(),
+            .unwrap_or_default();
+        return Err(device_code_error(status.as_u16(), description));
+    }
+    let device_code = value
+        .get("device_code")
+        .and_then(|item| item.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if device_code.is_empty() {
+        return Err("微软响应缺少 device_code，请稍后重试".into());
+    }
+    Ok(DeviceCode {
+        device_code,
         user_code: value
             .get("user_code")
             .and_then(|item| item.as_str())
@@ -276,6 +375,10 @@ pub async fn start_login(app: &tauri::AppHandle) -> Result<DeviceCode, String> {
             .and_then(|item| item.as_str())
             .unwrap_or_default()
             .into(),
+        verification_uri_complete: value
+            .get("verification_uri_complete")
+            .and_then(|item| item.as_str())
+            .map(|item| item.to_string()),
         expires_in: value
             .get("expires_in")
             .and_then(|item| item.as_u64())
@@ -297,6 +400,7 @@ pub async fn poll_login(app: &tauri::AppHandle, device_code: &str) -> Result<Pol
     let client = http_client(app)?;
     let response = client
         .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
+        .header("Accept-Language", "zh-CN")
         .form(&[
             ("client_id", client_id.as_str()),
             ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
@@ -306,28 +410,17 @@ pub async fn poll_login(app: &tauri::AppHandle, device_code: &str) -> Result<Pol
         .await
         .map_err(|e| format!("微软登录轮询失败：{e}"))?;
     let status = response.status();
-    let value: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    let value: serde_json::Value = response.json().await.unwrap_or_default();
     if !status.is_success() {
         let error = value
             .get("error")
             .and_then(|item| item.as_str())
             .unwrap_or("unknown");
-        return Ok(PollResult {
-            status: match error {
-                "authorization_pending" => "pending",
-                "slow_down" => "slow_down",
-                "authorization_declined" => "declined",
-                "expired_token" => "expired",
-                _ => "error",
-            }
-            .into(),
-            account: None,
-            message: value
-                .get("error_description")
-                .and_then(|item| item.as_str())
-                .unwrap_or(error)
-                .to_string(),
-        });
+        let description = value
+            .get("error_description")
+            .and_then(|item| item.as_str())
+            .unwrap_or_default();
+        return Ok(poll_error(error, description));
     }
     let ms_access = value
         .get("access_token")
@@ -337,7 +430,18 @@ pub async fn poll_login(app: &tauri::AppHandle, device_code: &str) -> Result<Pol
         .get("refresh_token")
         .and_then(|item| item.as_str())
         .unwrap_or_default();
-    let account = finish_login(app, &client, ms_access, refresh_token).await?;
+    let account = match finish_login(app, &client, ms_access, refresh_token).await {
+        Ok(account) => account,
+        Err(failure) => {
+            return Ok(PollResult {
+                status: failure.status.into(),
+                account: None,
+                message: failure.message,
+                terminal: true,
+                hint: failure.hint,
+            })
+        }
+    };
     let view = AccountView {
         active: true,
         id: account.id.clone(),
@@ -354,6 +458,8 @@ pub async fn poll_login(app: &tauri::AppHandle, device_code: &str) -> Result<Pol
         status: "success".into(),
         account: Some(view),
         message: "登录成功".into(),
+        terminal: true,
+        hint: None,
     })
 }
 
@@ -362,7 +468,7 @@ async fn finish_login(
     client: &reqwest::Client,
     ms_access: &str,
     refresh_token: &str,
-) -> Result<Account, String> {
+) -> Result<Account, LoginFailure> {
     let ticket = if ms_access.starts_with("d=") {
         ms_access.to_string()
     } else {
@@ -388,7 +494,8 @@ async fn finish_login(
         return Err(format!(
             "Xbox Live 认证被拒绝（HTTP {}）",
             xbox_status.as_u16()
-        ));
+        )
+        .into());
     }
     let xbl_token = xbox
         .get("Token")
@@ -424,7 +531,7 @@ async fn finish_login(
             2148916238 => "该账户未满 18 岁，需要家长将其加入 Microsoft 家庭组",
             _ => "XSTS 认证被拒绝，请确认账户可登录 Minecraft",
         };
-        return Err(format!("{message}（XErr {code}）"));
+        return Err(format!("{message}（XErr {code}）").into());
     }
     let xsts_token = xsts
         .get("Token")
@@ -465,7 +572,7 @@ async fn finish_login(
                 _ => "Minecraft 登录被拒绝，请在微软登录页选择“使用密码登录”而不是其他方式",
             }
         };
-        return Err(format!("{message}（HTTP {}）", mc_status.as_u16()));
+        return Err(format!("{message}（HTTP {}）", mc_status.as_u16()).into());
     }
     let mc_access = mc
         .get("access_token")
@@ -487,7 +594,8 @@ async fn finish_login(
         return Err(format!(
             "检查游戏所有权失败（HTTP {}）",
             entitlements_status.as_u16()
-        ));
+        )
+        .into());
     }
     let entitlements: serde_json::Value = entitlements_response.json().await.unwrap_or_default();
     if entitlements
@@ -496,7 +604,11 @@ async fn finish_login(
         .map(|items| items.is_empty())
         .unwrap_or(true)
     {
-        return Err("该账户没有 Minecraft: Java Edition 所有权，或 Game Pass 已过期".into());
+        return Err(LoginFailure::new(
+            "no_license",
+            "该账户没有 Minecraft: Java Edition 所有权，或 Game Pass 已过期",
+        )
+        .with_hint(STORE_URL));
     }
 
     let profile_response = client
@@ -526,18 +638,21 @@ async fn finish_login(
             })
             .unwrap_or(false);
         return Err(if owns_game {
-            "该账户拥有游戏但还没有 Java 版档案，请先在 minecraft.net 创建档案"
+            LoginFailure::new(
+                "no_profile",
+                "该账户拥有游戏但还没有 Java 版档案，请先在 minecraft.net 创建档案",
+            )
         } else {
-            "该账户没有 Minecraft: Java Edition 许可证"
-        }
-        .into());
+            LoginFailure::new("no_license", "该账户没有 Minecraft: Java Edition 许可证")
+                .with_hint(STORE_URL)
+        });
     }
     if !profile_status.is_success() {
         let message = match profile_status.as_u16() {
             429 => "查询 Minecraft 档案过于频繁，请稍后重试",
             _ => "获取 Minecraft 档案失败",
         };
-        return Err(format!("{message}（HTTP {}）", profile_status.as_u16()));
+        return Err(format!("{message}（HTTP {}）", profile_status.as_u16()).into());
     }
     let profile: serde_json::Value = profile_response.json().await.map_err(|e| e.to_string())?;
     let name = profile
@@ -609,7 +724,9 @@ async fn refresh(app: &tauri::AppHandle, account: &mut Account) -> Result<(), St
         .get("refresh_token")
         .and_then(|item| item.as_str())
         .unwrap_or(&refresh_token);
-    let mut updated = finish_login(app, &client, ms_access, new_refresh).await?;
+    let mut updated = finish_login(app, &client, ms_access, new_refresh)
+        .await
+        .map_err(|failure| failure.message)?;
     updated.id = account.id.clone();
     *account = updated;
     let mut accounts = read_accounts(app);
@@ -676,5 +793,32 @@ mod tests {
             offline_uuid("Player"),
             "a01e3843-e521-3998-958a-f459800e4d11"
         );
+    }
+
+    #[test]
+    fn device_code_errors_point_at_the_fix() {
+        let public_client = device_code_error(400, "AADSTS7000218: request body must contain client_assertion");
+        assert!(public_client.contains("公共客户端"));
+        assert!(public_client.contains("https://www.microsoft.com/link"));
+
+        let missing_app = device_code_error(400, "AADSTS700016: Application not found");
+        assert!(missing_app.contains("应用不存在"));
+
+        let unapproved = device_code_error(404, "");
+        assert!(unapproved.contains("aka.ms/mce-reviewappid"));
+    }
+
+    #[test]
+    fn poll_status_is_terminal_except_pending() {
+        assert!(!poll_error("authorization_pending", "").terminal);
+        assert!(!poll_error("slow_down", "").terminal);
+
+        let expired = poll_error("expired_token", "");
+        assert!(expired.terminal);
+        assert_eq!(expired.status, "expired");
+
+        let reused = poll_error("bad_verification_code", "code already used");
+        assert!(reused.terminal);
+        assert_eq!(reused.status, "invalid_code");
     }
 }

@@ -1,4 +1,15 @@
-# Aurora Launcher v0.4.1
+# Aurora Launcher v0.4.2
+
+参照 lmaml 教程第二章《微软 OAuth 登录》补齐设备码流程的细节：
+
+- 设备码请求带 `?mkt=zh-CN` 与 `Accept-Language: zh-CN`，微软返回中文提示与本地化错误描述。
+- 设备码接口失败时按 AADSTS 错误码给出可执行建议：应用不存在（700016）、未启用公共客户端流（7000218/7000215）、权限不足（700005）、未过 Minecraft 应用审核（HTTP 404，附 aka.ms/mce-reviewappid）。
+- 轮询结果区分终态（`pending`/`slow_down` 之外全部停止自动轮询）：过期、拒绝、设备码被复用、Client ID 无效都有独立状态与中文提示，不再无限轮询已被消耗的设备码。
+- 无游戏所有权/无许可证时返回 `no_license` 状态并在设置页显示“打开 Minecraft 商店”按钮（对齐教程中的商店跳转）。
+- 支持微软返回的 `verification_uri_complete`，有则直接打开带代码的登录链接。
+- README 补充 Azure 注册要点：账户类型、Web 平台重定向 `https://www.microsoft.com/link`、允许公共客户端流、品牌信息必填与审核表单。
+
+# Aurora Launcher v0.4.1（历史）
 
 - 微软登录修正：MC 令牌过期时间、所有权检查、XErr 映射、uhs 校验、access token DPAPI 加密。
 - 设备码自动打开浏览器、复制代码、自动轮询与 slow_down/过期处理。

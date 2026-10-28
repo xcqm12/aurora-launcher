@@ -115,6 +115,7 @@ export type DeviceCode = {
   device_code: string;
   user_code: string;
   verification_uri: string;
+  verification_uri_complete?: string | null;
   expires_in: number;
   interval: number;
   message: string;
@@ -123,6 +124,8 @@ export type PollResult = {
   status: string;
   account?: AccountView | null;
   message: string;
+  terminal: boolean;
+  hint?: string | null;
 };
 export type LoaderInstallResult = { version_id: string; installer: string; log: string };
 export type ImportResult = {

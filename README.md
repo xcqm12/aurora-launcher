@@ -73,11 +73,33 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成
 
 ## 签名
 
-本地：
+本机使用自签名代码签名证书 `CN=SevenZeroMeowTeam`（Code Signing EKU，到期 2027-10-22）：私钥在 `Cert:\CurrentUser\My`，公钥已导入本机（LocalMachine）的“受信任根证书颁发机构”和“受信任发布者”，因此在这台电脑上签名状态为“有效”。
+
+- 新机器或更换证书后，以管理员身份导入信任（脚本可重复执行）：
 
 ```powershell
-powershell -File scripts/sign-windows.ps1 -Path target/release/aurora-launcher.exe -Thumbprint <证书指纹> -TimestampUrl ""
+powershell -File scripts/trust-codesign-cert.ps1 -Thumbprint <证书指纹>
 ```
+
+- 签名使用 SHA-256 摘要与 RFC3161 时间戳，签完自动执行 `signtool verify /pa`：
+
+```powershell
+powershell -File scripts/sign-windows.ps1 -Path <exe 列表> -Thumbprint <证书指纹>
+```
+
+- 时间戳服务不可达时加 `-TimestampUrl ""`；脚本会自动查找 Windows SDK 的 signtool，找不到会直接报错。
+- 复核签名与哈希：
+
+```powershell
+Get-AuthenticodeSignature <exe> | Format-List Status, SignerCertificate
+sha256sum -c SHA256SUMS.txt
+```
+
+现实限制：
+
+- 自签名证书只在安装了该证书的电脑上显示可信，其他电脑仍会提示“未知发布者”，也不会积累 SmartScreen 信誉；面向公众分发需要购买 OV/EV 代码签名证书。
+- 仓库未配置 `WINDOWS_CERT_PFX_BASE64` / `WINDOWS_CERT_PASSWORD`，CI 产物默认未签名。发布流程是：本地构建 standard/cn → 签名 → `gh release upload --clobber` 覆盖 CI 资产 → 重新生成并上传 `SHA256SUMS.txt`。
+- Tauri 的 NSIS 卸载器在安装时生成，当前签名覆盖安装包与主程序，卸载器没有签名。
 
 CI：配置 `WINDOWS_CERT_PFX_BASE64` 与 `WINDOWS_CERT_PASSWORD` Secrets 后自动签名 EXE 与 NSIS；未配置时构建仍成功但未签名。
 

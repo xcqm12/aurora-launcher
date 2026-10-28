@@ -102,8 +102,10 @@ fn device_code_error(status: u16, description: &str) -> String {
         "应用不存在：请确认 Client ID 没有填错，且账户类型支持“个人 Microsoft 账户”。"
     } else if description.contains("AADSTS7000218") || description.contains("AADSTS7000215") {
         "应用未启用公共客户端：Azure 门户 → 身份验证 → 允许公共客户端流，或添加 Web 平台重定向 https://www.microsoft.com/link 。"
+    } else if description.contains("AADSTS65001") {
+        "应用缺少权限或用户未同意：请在 API 权限中添加 XboxLive.signin 与 offline_access。"
     } else if description.contains("AADSTS700005") {
-        "授权被拒绝：请确认应用已添加 XboxLive.signin 与 offline_access 权限。"
+        "授权请求无效：请重新发起登录；若反复出现请检查应用的账户类型与平台配置。"
     } else if status == 404 {
         "微软返回 404，通常是该 Client ID 未通过 Minecraft 应用审核；可在 https://aka.ms/mce-reviewappid 提交审核。"
     } else {

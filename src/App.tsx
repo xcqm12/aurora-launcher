@@ -45,6 +45,7 @@ import {
   ResourceVersion,
   VersionManifest,
   YggdrasilProfile,
+  LittleSkinOauthDevice,
 } from "./api";
 
 type View = "home" | "browse" | "instances" | "loaders" | "settings";
@@ -1940,6 +1941,9 @@ function SettingsPage({
   const [lsPendingId, setLsPendingId] = useState<string | null>(null);
   const [lsSelected, setLsSelected] = useState("");
   const [lsBusy, setLsBusy] = useState(false);
+  const [lsOauth, setLsOauth] = useState<LittleSkinOauthDevice | null>(null);
+  const [lsOauthMessage, setLsOauthMessage] = useState("");
+  const [lsOauthBusy, setLsOauthBusy] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState("");
@@ -2094,6 +2098,80 @@ function SettingsPage({
       setLsBusy(false);
     }
   };
+
+  const startLsOauth = async () => {
+    setLsOauthBusy(true);
+    setLsOauthMessage("");
+    try {
+      const device = await api.littleskinOauthStart();
+      setLsOauth(device);
+      void api
+        .openExternal(device.verification_uri_complete || device.verification_uri)
+        .catch(() => undefined);
+      void navigator.clipboard?.writeText(device.user_code).catch(() => undefined);
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setLsOauthBusy(false);
+    }
+  };
+
+  const copyLsOauthCode = () => {
+    if (!lsOauth) return;
+    void navigator.clipboard
+      ?.writeText(lsOauth.user_code)
+      .then(() => onNotice("授权码已复制"))
+      .catch(() => onNotice("复制失败，请手动选择授权码"));
+  };
+
+  const openLsOauth = () => {
+    if (!lsOauth) return;
+    void api
+      .openExternal(lsOauth.verification_uri_complete || lsOauth.verification_uri)
+      .catch((error) => onNotice(String(error)));
+  };
+
+  useEffect(() => {
+    if (!lsOauth) return;
+    let cancelled = false;
+    let delay = Math.max(3, lsOauth.interval) * 1000;
+    let elapsed = 0;
+    let timer = 0;
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const result = await api.littleskinOauthPoll(lsOauth.device_code);
+        if (cancelled) return;
+        setLsOauthMessage(result.message);
+        if (result.status === "success") {
+          setLsOauth(null);
+          setLsPassword("");
+          await loadAccounts();
+          onNotice("LittleSkin 授权登录成功");
+          return;
+        }
+        if (result.status === "slow_down") {
+          delay += 5000;
+        }
+        if (result.terminal) {
+          return;
+        }
+      } catch (error) {
+        if (!cancelled) setLsOauthMessage(String(error));
+      }
+      elapsed += delay;
+      if (elapsed > lsOauth.expires_in * 1000) {
+        setLsOauthMessage("授权码已过期，请重新发起授权登录");
+        return;
+      }
+      timer = window.setTimeout(() => void tick(), delay);
+    };
+    timer = window.setTimeout(() => void tick(), delay);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [lsOauth?.device_code]);
 
   const toggleSakura = async (enabled: boolean) => {
     setSakuraEnabled(enabled);
@@ -2370,6 +2448,40 @@ function SettingsPage({
         )}
         <div className="external-login">
           <h4>LittleSkin 登录（外置 Yggdrasil）</h4>
+          <div className="inline-field">
+            <button className="primary-button" onClick={() => void startLsOauth()} disabled={lsOauthBusy}>
+              {lsOauthBusy ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />} 授权登录（推荐）
+            </button>
+          </div>
+          <p className="security-note">
+            授权登录走 LittleSkin OAuth 设备代码流，不输入密码；应用需要先在 LittleSkin 申请设备代码流白名单，未通过时会显示具体原因。
+          </p>
+          {lsOauth && (
+            <div className="device-code">
+              <p>
+                浏览器已打开授权页；若没有，请访问 <strong>{lsOauth.verification_uri}</strong> 并输入授权码：
+              </p>
+              <div className="user-code">{lsOauth.user_code}</div>
+              <div className="settings-actions">
+                <button className="ghost-button" onClick={copyLsOauthCode}>复制授权码</button>
+                <button className="ghost-button" onClick={openLsOauth}>
+                  <ExternalLink size={15} /> 重新打开授权页
+                </button>
+                <button
+                  className="ghost-button"
+                  onClick={() => {
+                    setLsOauth(null);
+                    setLsOauthMessage("");
+                  }}
+                >
+                  取消授权
+                </button>
+              </div>
+              <p className="security-note">授权码约 5 分钟内有效；在授权页选择角色后会自动完成登录。</p>
+              {lsOauthMessage && <p className="security-note">{lsOauthMessage}</p>}
+            </div>
+          )}
+          <p className="security-note">或使用 LittleSkin 账号密码（传统 Yggdrasil 登录）：</p>
           <div className="inline-field">
             <input
               value={lsUsername}

@@ -15,6 +15,12 @@ use std::{
 
 pub const DEFAULT_SERVER: &str = "https://littleskin.cn/api/yggdrasil/";
 const AUTHLIB_LATEST: &str = "https://authlib-injector.yushi.moe/artifact/latest.json";
+const OAUTH_CLIENT_ID: &str = "800";
+const OAUTH_DEVICE_URL: &str = "https://open.littleskin.cn/oauth/device_code";
+const OAUTH_TOKEN_URL: &str = "https://open.littleskin.cn/oauth/token";
+const OAUTH_SCOPE: &str =
+    "openid Yggdrasil.PlayerProfiles.Select Yggdrasil.MinecraftToken.Create";
+const OAUTH_WHITELIST_HINT: &str = "应用未加入 LittleSkin 设备代码流白名单：请把 OAuth 应用的回调 URL 设为 https://open.littleskin.cn/oauth/callback，并用绑定邮箱发工单（标题：申请 OAuth 设备代码流白名单，正文写应用名称与客户端 ID 800 及 Yggdrasil 权限）。";
 const PENDING_TTL: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Clone)]
@@ -393,6 +399,245 @@ pub fn select(
     auth::upsert(app, account)
 }
 
+#[derive(Debug, Serialize)]
+pub struct OauthDevice {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_uri_complete: Option<String>,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OauthPoll {
+    pub status: String,
+    pub terminal: bool,
+    pub message: String,
+    pub account: Option<AccountView>,
+}
+
+fn decode_jwt_payload(token: &str) -> Option<serde_json::Value> {
+    let payload = token.split('.').nth(1)?;
+    let engine = &base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let bytes = engine
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
+        .ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn selected_profile_from_id_token(token: &str) -> Option<ProfileView> {
+    let value = decode_jwt_payload(token)?;
+    let profile = value.get("selectedProfile")?;
+    Some(ProfileView {
+        id: profile.get("id")?.as_str()?.to_string(),
+        name: profile.get("name")?.as_str()?.to_string(),
+    })
+}
+
+fn oauth_device_error(error: &str, description: &str) -> String {
+    if error == "invalid_client" {
+        return OAUTH_WHITELIST_HINT.to_string();
+    }
+    if error == "invalid_scope" {
+        return "LittleSkin 拒绝了 scope：Yggdrasil.PlayerProfiles.Read 与 Select 不能同时申请，且必须包含 openid。".into();
+    }
+    if description.is_empty() {
+        format!("LittleSkin 授权请求失败：{error}")
+    } else {
+        format!("LittleSkin 授权请求失败：{description}")
+    }
+}
+
+pub async fn oauth_start(app: &tauri::AppHandle) -> Result<OauthDevice, String> {
+    let client = http_client(app)?;
+    let response = client
+        .post(OAUTH_DEVICE_URL)
+        .header("Accept", "application/json")
+        .form(&[("client_id", OAUTH_CLIENT_ID), ("scope", OAUTH_SCOPE)])
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("连接 LittleSkin 授权服务失败：{e}"))?;
+    let status = response.status();
+    let value: serde_json::Value = response.json().await.unwrap_or_default();
+    if !status.is_success() {
+        let error = value
+            .get("error")
+            .and_then(|item| item.as_str())
+            .unwrap_or("unknown");
+        let description = value
+            .get("error_description")
+            .and_then(|item| item.as_str())
+            .unwrap_or_default();
+        return Err(oauth_device_error(error, description));
+    }
+    let device_code = value
+        .get("device_code")
+        .and_then(|item| item.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if device_code.is_empty() {
+        return Err("LittleSkin 响应缺少 device_code".into());
+    }
+    Ok(OauthDevice {
+        device_code,
+        user_code: value
+            .get("user_code")
+            .and_then(|item| item.as_str())
+            .unwrap_or_default()
+            .into(),
+        verification_uri: value
+            .get("verification_uri")
+            .and_then(|item| item.as_str())
+            .unwrap_or("https://open.littleskin.cn/oauth/link")
+            .into(),
+        verification_uri_complete: value
+            .get("verification_uri_complete")
+            .and_then(|item| item.as_str())
+            .map(str::to_string),
+        expires_in: value
+            .get("expires_in")
+            .and_then(|item| item.as_u64())
+            .unwrap_or(300),
+        interval: value
+            .get("interval")
+            .and_then(|item| item.as_u64())
+            .unwrap_or(5),
+    })
+}
+
+pub async fn oauth_poll(
+    app: &tauri::AppHandle,
+    device_code: &str,
+) -> Result<OauthPoll, String> {
+    let client = http_client(app)?;
+    let response = client
+        .post(OAUTH_TOKEN_URL)
+        .header("Accept", "application/json")
+        .form(&[
+            (
+                "grant_type",
+                "urn:ietf:params:oauth:grant-type:device_code",
+            ),
+            ("client_id", OAUTH_CLIENT_ID),
+            ("device_code", device_code),
+        ])
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("LittleSkin 授权轮询失败：{e}"))?;
+    let status = response.status();
+    let value: serde_json::Value = response.json().await.unwrap_or_default();
+    if !status.is_success() {
+        let error = value
+            .get("error")
+            .and_then(|item| item.as_str())
+            .unwrap_or("unknown");
+        let description = value
+            .get("error_description")
+            .and_then(|item| item.as_str())
+            .unwrap_or_default();
+        let (state, message, terminal) = match error {
+            "authorization_pending" => ("pending", "等待你在浏览器中完成 LittleSkin 授权…".to_string(), false),
+            "slow_down" => ("slow_down", "轮询过快，已自动降低检查频率".to_string(), false),
+            "access_denied" => ("declined", "你取消了 LittleSkin 授权".to_string(), true),
+            "expired_token" => ("expired", "授权码已过期，请重新发起登录".to_string(), true),
+            "invalid_client" => ("client_error", OAUTH_WHITELIST_HINT.to_string(), true),
+            _ => (
+                "error",
+                if description.is_empty() {
+                    error.to_string()
+                } else {
+                    description.to_string()
+                },
+                true,
+            ),
+        };
+        return Ok(OauthPoll {
+            status: state.into(),
+            terminal,
+            message,
+            account: None,
+        });
+    }
+    let oauth_access = value
+        .get("access_token")
+        .and_then(|item| item.as_str())
+        .ok_or_else(|| "LittleSkin 授权响应缺少 access_token".to_string())?
+        .to_string();
+    let profile = value
+        .get("id_token")
+        .and_then(|item| item.as_str())
+        .and_then(selected_profile_from_id_token)
+        .ok_or_else(|| {
+            "授权成功，但 ID 令牌没有 selectedProfile。请确认应用申请了 Yggdrasil.PlayerProfiles.Select，并在授权页选择角色。".to_string()
+        })?;
+    let mc_response = client
+        .post("https://littleskin.cn/api/yggdrasil/authserver/oauth")
+        .bearer_auth(&oauth_access)
+        .json(&serde_json::json!({ "uuid": profile.id }))
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("创建 Minecraft 令牌失败：{e}"))?;
+    let mc_status = mc_response.status();
+    let mc: serde_json::Value = mc_response.json().await.unwrap_or_default();
+    if !mc_status.is_success() {
+        let message = mc
+            .get("errorMessage")
+            .and_then(|item| item.as_str())
+            .unwrap_or("无法创建 Minecraft 令牌");
+        let hint = match mc_status.as_u16() {
+            401 | 403 => "（请确认应用已获得 Yggdrasil.MinecraftToken.Create 权限）",
+            _ => "",
+        };
+        return Ok(OauthPoll {
+            status: "error".into(),
+            terminal: true,
+            message: format!("创建 Minecraft 令牌失败：{message}{hint}"),
+            account: None,
+        });
+    }
+    let access_token = mc
+        .get("accessToken")
+        .and_then(|item| item.as_str())
+        .ok_or_else(|| "Minecraft 令牌响应缺少 accessToken".to_string())?
+        .to_string();
+    let client_token = mc
+        .get("clientToken")
+        .and_then(|item| item.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let selected = mc
+        .get("selectedProfile")
+        .and_then(|item| serde_json::from_value::<RawProfile>(item.clone()).ok())
+        .map(|item| ProfileView {
+            id: item.id,
+            name: item.name,
+        })
+        .unwrap_or(profile);
+    let metadata = fetch_metadata(&client, DEFAULT_SERVER)
+        .await
+        .unwrap_or_default();
+    let account = build_account(
+        DEFAULT_SERVER,
+        &metadata,
+        &access_token,
+        &client_token,
+        &selected,
+    )?;
+    let view = auth::upsert(app, account)?;
+    Ok(OauthPoll {
+        status: "success".into(),
+        terminal: true,
+        message: "LittleSkin 授权登录成功".into(),
+        account: Some(view),
+    })
+}
+
 async fn ensure_jar(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = data_dir(app)?.join("authlib");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -540,5 +785,30 @@ mod tests {
             dash_uuid("a01e3843e5213998958af459800e4d11"),
             "a01e3843-e521-3998-958a-f459800e4d11"
         );
+    }
+
+    #[test]
+    fn selected_profile_is_read_from_id_token() {
+        let payload = serde_json::json!({
+            "selectedProfile": {
+                "id": "a01e3843e5213998958af459800e4d11",
+                "name": "Steve"
+            }
+        })
+        .to_string();
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.as_bytes());
+        let token = format!("header.{encoded}.signature");
+        let profile = selected_profile_from_id_token(&token).unwrap();
+        assert_eq!(profile.name, "Steve");
+        assert_eq!(profile.id, "a01e3843e5213998958af459800e4d11");
+        assert!(selected_profile_from_id_token("not-a-jwt").is_none());
+    }
+
+    #[test]
+    fn whitelist_error_is_explained() {
+        let message = oauth_device_error("invalid_client", "Client was not found or not whitelisted");
+        assert!(message.contains("白名单"));
+        assert!(message.contains("https://open.littleskin.cn/oauth/callback"));
+        assert!(message.contains("800"));
     }
 }

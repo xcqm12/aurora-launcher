@@ -135,6 +135,20 @@ export type YggdrasilLogin = {
   pending_id?: string | null;
   profiles: YggdrasilProfile[];
 };
+export type LittleSkinOauthDevice = {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  verification_uri_complete?: string | null;
+  expires_in: number;
+  interval: number;
+};
+export type LittleSkinOauthPoll = {
+  status: string;
+  terminal: boolean;
+  message: string;
+  account?: AccountView | null;
+};
 export type LoaderInstallResult = { version_id: string; installer: string; log: string };
 export type ImportResult = {
   kind: string;
@@ -240,4 +254,7 @@ export const api = {
     invoke<YggdrasilLogin>("yggdrasil_login", { server, username, password }),
   yggdrasilSelect: (pendingId: string, profileId: string) =>
     invoke<AccountView>("yggdrasil_select", { pendingId, profileId }),
+  littleskinOauthStart: () => invoke<LittleSkinOauthDevice>("littleskin_oauth_start"),
+  littleskinOauthPoll: (deviceCode: string) =>
+    invoke<LittleSkinOauthPoll>("littleskin_oauth_poll", { deviceCode }),
 };

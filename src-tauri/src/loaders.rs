@@ -320,6 +320,7 @@ pub async fn install(
     let java = crate::launch::find_java(instance.java_path.as_deref(), 8)?;
     let mut command = Command::new(&java);
     command.current_dir(&game_dir);
+    crate::hide_console(&mut command);
     match loader.as_str() {
         "fabric" | "legacyfabric" => {
             command

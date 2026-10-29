@@ -704,9 +704,24 @@ fn list_loaders() -> Vec<LoaderInfo> {
     ]
 }
 
+pub(crate) fn hide_console(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = command;
+    }
+}
+
 #[tauri::command]
 fn detect_java() -> Vec<JavaRuntime> {
-    let output = Command::new("java").arg("-version").output();
+    let mut command = Command::new("java");
+    command.arg("-version");
+    hide_console(&mut command);
+    let output = command.output();
     match output {
         Ok(out) => {
             let raw = String::from_utf8_lossy(&out.stderr).to_string();
@@ -2432,8 +2447,10 @@ fn kill_instance(state: tauri::State<'_, LaunchState>, instance_id: String) -> R
         .ok()
         .and_then(|pids| pids.get(&instance_id).copied())
         .ok_or_else(|| "没有正在运行的游戏进程".to_string())?;
-    Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
+    let mut command = Command::new("taskkill");
+    command.args(["/PID", &pid.to_string(), "/T", "/F"]);
+    hide_console(&mut command);
+    command
         .output()
         .map_err(|e| format!("结束进程失败：{e}"))?;
     state.set_status(&instance_id, "stopped");
@@ -2563,6 +2580,19 @@ fn yggdrasil_select(
     profile_id: String,
 ) -> Result<auth::AccountView, String> {
     yggdrasil::select(&app, &pending_id, &profile_id)
+}
+
+#[tauri::command]
+async fn littleskin_oauth_start(app: tauri::AppHandle) -> Result<yggdrasil::OauthDevice, String> {
+    yggdrasil::oauth_start(&app).await
+}
+
+#[tauri::command]
+async fn littleskin_oauth_poll(
+    app: tauri::AppHandle,
+    device_code: String,
+) -> Result<yggdrasil::OauthPoll, String> {
+    yggdrasil::oauth_poll(&app, &device_code).await
 }
 
 pub fn smoke_launch(
@@ -2782,7 +2812,9 @@ pub fn run() {
             ms_poll_login,
             ms_check_client_id,
             yggdrasil_login,
-            yggdrasil_select
+            yggdrasil_select,
+            littleskin_oauth_start,
+            littleskin_oauth_poll
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aurora Launcher");

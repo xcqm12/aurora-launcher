@@ -6,7 +6,7 @@ compatibility_date = "2026-10-27"
 BLOCKED_COUNTRIES = "CN"
 PATH_PREFIX = "/aurora"
 # GitHub Release assets for the version you want to gate.
-ORIGIN_BASE = "https://github.com/xcqm12/aurora-launcher/releases/download/v0.4.4/"
+ORIGIN_BASE = "https://github.com/xcqm12/aurora-launcher/releases/download/v0.4.5/"
 
 # Uncomment after the zone is confirmed in the same Cloudflare account.
 # routes = [{ pattern = "qlmtest.dpdns.org/aurora/*", zone_name = "qlmtest.dpdns.org" }]

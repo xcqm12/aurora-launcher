@@ -1,4 +1,12 @@
-# Aurora Launcher v0.4.4
+# Aurora Launcher v0.4.5
+
+- 新增 LittleSkin OAuth 授权登录（设备代码流，客户端 ID 800）：浏览器授权并选角色，再用 `authserver/oauth` 换取 Minecraft 令牌，无需密码与客户端 Secret。
+- 授权失败会提示可执行原因：未加入设备代码流白名单（回调需设为 https://open.littleskin.cn/oauth/callback 并发送工单）、scope 冲突、授权过期等；初次通过多为测试模式，仅创建者可授权。
+- 保留 LittleSkin 账号密码（传统 Yggdrasil）登录作为备选。
+- 修复控制台窗口闪现：Java 版本探测、加载器安装器、taskkill 等子进程统一使用 `CREATE_NO_WINDOW`；发布版主程序保持 windows 子系统。
+- 不把客户端 Secret 写入仓库或二进制；图中 Secret 已在对话中暴露，建议在 LittleSkin 应用管理页重置。
+
+# Aurora Launcher v0.4.4（历史）
 
 - 新增 LittleSkin 登录（Yggdrasil）：设置页用 LittleSkin 邮箱/密码登录，令牌 DPAPI 保存；启动前先 validate，失效自动 refresh，失败提示重新登录。
 - 启动时注入 authlib-injector：从官方接口读取版本与 SHA-256，校验后缓存到应用数据目录，传 `-javaagent` 与 Base64 元数据；接口不可达时使用缓存。

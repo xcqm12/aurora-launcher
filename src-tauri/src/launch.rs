@@ -1,4 +1,4 @@
-use crate::{safe_filename, write_atomic};
+use crate::{hide_console, safe_filename, write_atomic};
 use futures::stream::{self, StreamExt};
 use serde::Deserialize;
 use serde_json::Value;
@@ -623,7 +623,10 @@ fn extract_natives(
 }
 
 fn java_major(path: &Path) -> Option<u32> {
-    let output = Command::new(path).arg("-version").output().ok()?;
+    let mut command = Command::new(path);
+    command.arg("-version");
+    hide_console(&mut command);
+    let output = command.output().ok()?;
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -1100,15 +1103,6 @@ pub async fn prepare(
     })
 }
 
-#[cfg(windows)]
-fn hide_console(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    command.creation_flags(0x08000000);
-}
-
-#[cfg(not(windows))]
-fn hide_console(_command: &mut Command) {}
-
 pub fn spawn(
     prepared: &Prepared,
     on_line: Arc<dyn Fn(String) + Send + Sync>,
@@ -1176,9 +1170,10 @@ pub async fn smoke(ctx: &LaunchContext, seconds: u64) -> Result<String, String> 
         Arc::new(|_| {}),
     )?;
     std::thread::sleep(std::time::Duration::from_secs(seconds));
-    let _ = Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
-        .output();
+    let mut command = Command::new("taskkill");
+    command.args(["/PID", &pid.to_string(), "/T", "/F"]);
+    hide_console(&mut command);
+    let _ = command.output();
     let lines = lines.lock().unwrap().clone();
     Ok(lines.join("\n"))
 }

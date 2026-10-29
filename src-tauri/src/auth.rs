@@ -19,6 +19,12 @@ pub struct Account {
     pub expires_at: u64,
     #[serde(default)]
     pub refresh_token_enc: String,
+    #[serde(default)]
+    pub server: String,
+    #[serde(default)]
+    pub client_token: String,
+    #[serde(default)]
+    pub metadata: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -28,6 +34,21 @@ pub struct AccountView {
     pub name: String,
     pub uuid: String,
     pub active: bool,
+    #[serde(default)]
+    pub server: String,
+}
+
+impl AccountView {
+    fn of(account: &Account, active: bool) -> Self {
+        Self {
+            id: account.id.clone(),
+            kind: account.kind.clone(),
+            name: account.name.clone(),
+            uuid: account.uuid.clone(),
+            active,
+            server: account.server.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -38,6 +59,7 @@ pub struct LaunchAccount {
     pub user_type: String,
     pub client_id: String,
     pub xuid: String,
+    pub authlib: Option<crate::yggdrasil::LaunchAuthlib>,
 }
 
 #[derive(Debug, Serialize)]
@@ -209,7 +231,7 @@ fn accounts_file(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(data_dir(app)?.join("accounts.json"))
 }
 
-fn read_accounts(app: &tauri::AppHandle) -> Vec<Account> {
+pub(crate) fn read_accounts(app: &tauri::AppHandle) -> Vec<Account> {
     let Ok(path) = accounts_file(app) else {
         return Vec::new();
     };
@@ -219,7 +241,7 @@ fn read_accounts(app: &tauri::AppHandle) -> Vec<Account> {
         .unwrap_or_default()
 }
 
-fn write_accounts(app: &tauri::AppHandle, accounts: &[Account]) -> Result<(), String> {
+pub(crate) fn write_accounts(app: &tauri::AppHandle, accounts: &[Account]) -> Result<(), String> {
     let dir = data_dir(app)?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = accounts_file(app)?;
@@ -258,14 +280,14 @@ fn decrypt_secret(value: &str) -> Result<String, String> {
     }
 }
 
-fn protect(value: &str) -> Result<String, String> {
+pub(crate) fn protect(value: &str) -> Result<String, String> {
     if value.is_empty() {
         return Ok(String::new());
     }
     Ok(format!("enc:{}", encrypt_secret(value)?))
 }
 
-fn unprotect(value: &str) -> Result<String, String> {
+pub(crate) fn unprotect(value: &str) -> Result<String, String> {
     match value.strip_prefix("enc:") {
         Some(rest) => decrypt_secret(rest),
         None => Ok(value.to_string()),
@@ -294,15 +316,19 @@ pub fn offline_uuid(name: &str) -> String {
 pub fn list(app: &tauri::AppHandle) -> Vec<AccountView> {
     let active = read_settings(app).active_account;
     read_accounts(app)
-        .into_iter()
-        .map(|account| AccountView {
-            active: account.id == active,
-            id: account.id,
-            kind: account.kind,
-            name: account.name,
-            uuid: account.uuid,
-        })
+        .iter()
+        .map(|account| AccountView::of(account, account.id == active))
         .collect()
+}
+
+pub(crate) fn upsert(app: &tauri::AppHandle, account: Account) -> Result<AccountView, String> {
+    let view = AccountView::of(&account, true);
+    let mut accounts = read_accounts(app);
+    accounts.retain(|item| item.id != account.id);
+    accounts.push(account);
+    write_accounts(app, &accounts)?;
+    set_active(app, &view.id)?;
+    Ok(view)
 }
 
 pub fn add_offline(app: &tauri::AppHandle, name: &str) -> Result<AccountView, String> {
@@ -333,18 +359,15 @@ pub fn add_offline(app: &tauri::AppHandle, name: &str) -> Result<AccountView, St
         access_token: "0".into(),
         expires_at: u64::MAX,
         refresh_token_enc: String::new(),
+        server: String::new(),
+        client_token: String::new(),
+        metadata: String::new(),
     };
-    let id = account.id.clone();
+    let view = AccountView::of(&account, true);
     accounts.push(account);
     write_accounts(app, &accounts)?;
-    set_active(app, &id)?;
-    Ok(AccountView {
-        id,
-        kind: "offline".into(),
-        name: name.into(),
-        uuid,
-        active: true,
-    })
+    set_active(app, &view.id)?;
+    Ok(view)
 }
 
 pub fn set_active(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
@@ -499,13 +522,7 @@ pub async fn poll_login(app: &tauri::AppHandle, device_code: &str) -> Result<Pol
             })
         }
     };
-    let view = AccountView {
-        active: true,
-        id: account.id.clone(),
-        kind: account.kind.clone(),
-        name: account.name.clone(),
-        uuid: account.uuid.clone(),
-    };
+    let view = AccountView::of(&account, true);
     let mut accounts = read_accounts(app);
     accounts.retain(|item| item.id != account.id);
     accounts.push(account.clone());
@@ -736,6 +753,9 @@ async fn finish_login(
         access_token: protect(mc_access)?,
         expires_at: unix_now() + mc_expires.max(60) - 30,
         refresh_token_enc: refresh_enc,
+        server: String::new(),
+        client_token: String::new(),
+        metadata: String::new(),
     })
 }
 
@@ -806,6 +826,7 @@ pub async fn launch_account(app: &tauri::AppHandle) -> Result<LaunchAccount, Str
             user_type: "legacy".into(),
             client_id: String::new(),
             xuid: String::new(),
+            authlib: None,
         });
     }
     let index = accounts
@@ -817,19 +838,29 @@ pub async fn launch_account(app: &tauri::AppHandle) -> Result<LaunchAccount, Str
         refresh(app, &mut account).await?;
         accounts[index] = account.clone();
     }
-    let access_token = if account.kind == "microsoft" {
-        unprotect(&account.access_token)?
-    } else {
+    let mut authlib = None;
+    if account.kind == "yggdrasil" {
+        let (updated, info) = crate::yggdrasil::prepare_launch(app, &account).await?;
+        if let Some(updated) = updated {
+            accounts[index] = updated.clone();
+            account = updated;
+            write_accounts(app, &accounts)?;
+        }
+        authlib = Some(info);
+    }
+    let access_token = if account.kind == "offline" {
         "0".into()
+    } else {
+        unprotect(&account.access_token)?
     };
     Ok(LaunchAccount {
         name: account.name,
         uuid: account.uuid,
         access_token,
-        user_type: if account.kind == "microsoft" {
-            "msa".into()
-        } else {
+        user_type: if account.kind == "offline" {
             "legacy".into()
+        } else {
+            "msa".into()
         },
         client_id: if account.kind == "microsoft" {
             client_id(app).unwrap_or_default()
@@ -837,6 +868,7 @@ pub async fn launch_account(app: &tauri::AppHandle) -> Result<LaunchAccount, Str
             String::new()
         },
         xuid: account.xuid,
+        authlib,
     })
 }
 

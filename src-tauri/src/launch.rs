@@ -32,6 +32,7 @@ pub struct LaunchContext {
     pub user_type: String,
     pub client_id: String,
     pub xuid: String,
+    pub authlib: Option<crate::yggdrasil::LaunchAuthlib>,
     pub download_source: String,
     pub proxy: String,
 }
@@ -734,6 +735,24 @@ fn build_classpath(client_jar: &Path, libraries: &[PathBuf]) -> String {
     entries.join(";")
 }
 
+fn authlib_args(authlib: Option<&crate::yggdrasil::LaunchAuthlib>) -> Vec<String> {
+    let Some(authlib) = authlib else {
+        return Vec::new();
+    };
+    let mut args = vec![format!(
+        "-javaagent:{}={}",
+        authlib.jar.display(),
+        authlib.server
+    )];
+    if !authlib.prefetched.is_empty() {
+        args.push(format!(
+            "-Dauthlibinjector.yggdrasil.prefetched={}",
+            authlib.prefetched
+        ));
+    }
+    args
+}
+
 pub async fn prepare(
     ctx: &LaunchContext,
     report: &(dyn Fn(&str) + Send + Sync),
@@ -996,7 +1015,7 @@ pub async fn prepare(
     );
     placeholders.insert("natives_directory", natives.clone());
     placeholders.insert("launcher_name", "Aurora".into());
-    placeholders.insert("launcher_version", "0.4.1".into());
+    placeholders.insert("launcher_version", env!("CARGO_PKG_VERSION").into());
     placeholders.insert("classpath", classpath.clone());
     placeholders.insert("classpath_separator", ";".into());
     placeholders.insert("library_directory", libraries_dir.clone());
@@ -1018,6 +1037,7 @@ pub async fn prepare(
         args.push("-cp".into());
         args.push(classpath.clone());
     }
+    args.extend(authlib_args(ctx.authlib.as_ref()));
     if !args
         .iter()
         .any(|arg| arg.starts_with("-Djava.library.path="))
@@ -1034,7 +1054,7 @@ pub async fn prepare(
         .iter()
         .any(|arg| arg.starts_with("-Dminecraft.launcher.version="))
     {
-        args.push("-Dminecraft.launcher.version=0.4.1".into());
+        args.push(format!("-Dminecraft.launcher.version={}", env!("CARGO_PKG_VERSION")));
     }
     if let Some(logging) = version
         .logging
@@ -1237,5 +1257,20 @@ mod tests {
             replace_placeholders("--username ${auth_player_name} -cp ${classpath}", &map),
             "--username Steve -cp a.jar;b.jar"
         );
+    }
+
+    #[test]
+    fn authlib_args_inject_agent_and_metadata() {
+        let info = crate::yggdrasil::LaunchAuthlib {
+            jar: PathBuf::from("C:\\aurora\\authlib-injector-1.2.8.jar"),
+            server: "https://littleskin.cn/api/yggdrasil/".into(),
+            prefetched: "eyJtZXRhIjp7fX0=".into(),
+        };
+        let args = authlib_args(Some(&info));
+        assert_eq!(args.len(), 2);
+        assert!(args[0].starts_with("-javaagent:"));
+        assert!(args[0].ends_with("authlib-injector-1.2.8.jar=https://littleskin.cn/api/yggdrasil/"));
+        assert!(args[1].starts_with("-Dauthlibinjector.yggdrasil.prefetched="));
+        assert!(authlib_args(None).is_empty());
     }
 }

@@ -1,6 +1,14 @@
 # Aurora Launcher
 
-Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南。
+Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录。
+
+## 0.4.4 更新内容
+
+- 新增 **LittleSkin 登录**：邮箱/密码走 LittleSkin 的 Yggdrasil `authserver/authenticate`，令牌保存在本机，支持自动刷新与启动前校验；密码只发送给 littleskin.cn，不保存、不写日志。
+- 启动时注入 `authlib-injector`：`-javaagent` 与预取的 Yggdrasil 元数据（Base64）一起传给 JVM，皮肤与角色来自 LittleSkin；注入器从官方 `authlib-injector.yushi.moe` 下载并按接口给出的 SHA-256 校验，缓存在应用数据目录。
+- 多角色账户在设置页弹出角色选择；无角色时提示先到 littleskin.cn 创建。
+- 账户列表区分“微软正版 / LittleSkin / 离线”；外置登录使用 `msa` 用户类型与 Yggdrasil 令牌，不再要求微软 Client ID。
+- 启动参数中的启动器版本号改为读取 `CARGO_PKG_VERSION`，不再硬编码 0.4.1。
 
 ## 0.4.3 更新内容
 
@@ -48,6 +56,7 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成
 - 每个实例独立 `instance.json`、`game/versions|libraries|assets|natives`、`mods`、`resourcepacks`、`shaderpacks`、`saves`、`datapacks`、`config`、`logs`、`downloads`。
 - 启动失败会返回具体阶段（Java、版本 JSON、下载、natives、参数、进程），日志通过 Tauri 事件推送到控制台面板。
 - Modrinth / CurseForge 资源搜索与校验安装；CurseForge 密钥 DPAPI 保存，不进入日志和前端。
+- LittleSkin（Yggdrasil + authlib-injector）登录：账户/密码验证、令牌刷新、多角色选择、启动注入与注入器校验下载。
 
 ## 尚未实现 / 限制
 
@@ -71,7 +80,8 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成
 
 - 离线：用户名 1-16 位字母数字/下划线；UUID 使用 `OfflinePlayer:<name>` 的 MD5 并设置版本/变体位。
 - 微软：Azure 应用注册选择包含个人 Microsoft 账户的账户类型，添加 Web 平台重定向 `https://www.microsoft.com/link` 并启用“允许公共客户端流”；不需要在门户添加 API 权限。设置页填 Client ID 后点微软登录，按提示访问 `microsoft.com/link` 并输入设备码。
-- 刷新令牌与 Minecraft 访问令牌均 DPAPI 加密存于 `%APPDATA%\com.aurora.launcher\accounts.json`。
+- LittleSkin：设置页填写 LittleSkin 邮箱/用户名和密码，通过 Yggdrasil 认证；多角色账户会要求选择角色。启动时自动下载并用 `-javaagent` 注入 authlib-injector，令牌过期会先刷新再启动。
+- 刷新令牌、Minecraft 访问令牌与 Yggdrasil 令牌均 DPAPI 加密存于 `%APPDATA%\com.aurora.launcher\accounts.json`；密码从不落盘。
 
 ## 镜像与代理
 
@@ -152,7 +162,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.3>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.4>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）
 
@@ -211,10 +221,25 @@ Azure 注册要点（按教程顺序）：
 - 设置页“验证”只检查 Client ID 是否能走个人账户设备码流程，**不代表**已过 Minecraft 审核；审核结果只有在完整登录拉取档案时才体现。
 - 不内置、不提取、不冒用 PCL2/HMCL 等他人已审核的 Client ID：Client ID 是应用身份，冒用违反微软条款，也可能连累对方应用被撤销。
 
+## LittleSkin 外置登录
+
+LittleSkin 是 Yggdrasil（authlib-injector）体系，和微软登录互不影响：
+
+- API 根：`https://littleskin.cn/api/yggdrasil/`。启动器调用 `authserver/authenticate`、`authserver/refresh`、`authserver/validate`，并读取该根的元数据（`meta.serverName`、`skinDomains`、签名公钥）。
+- 启动时 JVM 参数：
+  - `-javaagent:<缓存目录>\authlib-injector-<版本>.jar=https://littleskin.cn/api/yggdrasil/`
+  - `-Dauthlibinjector.yggdrasil.prefetched=<元数据的 Base64>`
+  注入器第一次使用会从 `https://authlib-injector.yushi.moe/artifact/latest.json` 获取版本、下载地址和 SHA-256，校验后缓存到 `%APPDATA%\com.aurora.launcher\authlib\`；接口不可达时使用已有缓存。
+- 安全：密码只通过 HTTPS 发送给 littleskin.cn，不保存、不写日志；Yggdrasil 令牌与 `clientToken` 保存在 `accounts.json`，访问令牌 DPAPI 加密。启动前先 `validate`，失效则 `refresh`，失败会提示重新登录。
+- 多角色：`authenticate` 未返回 `selectedProfile` 且有多个角色时，设置页显示角色下拉框；待选会话 10 分钟过期，不会把令牌传给前端。
+- 实测：用 Java 21 加载 `authlib-injector 1.2.8` 与真实 LittleSkin 元数据，代理正确识别认证服务器；登录成功与否需要你自己的 LittleSkin 账户验证。
+
+限制：目前界面只提供 LittleSkin 预设，后端 `normalize_server` 已支持其他 https Yggdrasil 服务器；微软正版账户与外置登录账户是两个独立账户类型，不能混用。
+
 ## Cloudflare 锁区网关（qlmtest.dpdns.org）
 
 - 域名已托管在 Cloudflare（NS：fred/magali.ns.cloudflare.com），是独立 zone，不是 dpdns.org 的子记录。
-- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.3 Release 资产回源，`PATH_PREFIX=/aurora`。
+- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.4 Release 资产回源，`PATH_PREFIX=/aurora`。
 - 本地已验证：CN 请求 403，其他地区 200 且回源到正确的 Release 资产 URL。
 - **尚未部署**：需要 Cloudflare 凭据。你提供的 32 位 Key 是 Global API Key（需配邮箱、全账号权限，不推荐），建议在 Cloudflare 面板创建 Scoped Token（Workers Scripts:Edit、Zone Workers Routes:Edit、DNS:Edit、Zone:Read，范围限 qlmtest.dpdns.org），然后：
 

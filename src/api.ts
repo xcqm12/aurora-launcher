@@ -110,6 +110,7 @@ export type AccountView = {
   name: string;
   uuid: string;
   active: boolean;
+  server?: string;
 };
 export type DeviceCode = {
   device_code: string;
@@ -128,6 +129,12 @@ export type PollResult = {
   hint?: string | null;
 };
 export type ClientIdCheck = { ok: boolean; message: string };
+export type YggdrasilProfile = { id: string; name: string };
+export type YggdrasilLogin = {
+  account?: AccountView | null;
+  pending_id?: string | null;
+  profiles: YggdrasilProfile[];
+};
 export type LoaderInstallResult = { version_id: string; installer: string; log: string };
 export type ImportResult = {
   kind: string;
@@ -229,4 +236,8 @@ export const api = {
   msStartLogin: () => invoke<DeviceCode>("ms_start_login"),
   msPollLogin: (deviceCode: string) => invoke<PollResult>("ms_poll_login", { deviceCode }),
   msCheckClientId: (clientId: string) => invoke<ClientIdCheck>("ms_check_client_id", { clientId }),
+  yggdrasilLogin: (server: string, username: string, password: string) =>
+    invoke<YggdrasilLogin>("yggdrasil_login", { server, username, password }),
+  yggdrasilSelect: (pendingId: string, profileId: string) =>
+    invoke<AccountView>("yggdrasil_select", { pendingId, profileId }),
 };

@@ -1,4 +1,12 @@
-# Aurora Launcher v0.4.3
+# Aurora Launcher v0.4.4
+
+- 新增 LittleSkin 登录（Yggdrasil）：设置页用 LittleSkin 邮箱/密码登录，令牌 DPAPI 保存；启动前先 validate，失效自动 refresh，失败提示重新登录。
+- 启动时注入 authlib-injector：从官方接口读取版本与 SHA-256，校验后缓存到应用数据目录，传 `-javaagent` 与 Base64 元数据；接口不可达时使用缓存。
+- 多角色账户在设置页选择角色；待选会话 10 分钟过期，令牌不经过前端。
+- 账户列表区分“LittleSkin”；启动参数里的启动器版本改为编译期读取，不再硬编码。
+- 密码只通过 HTTPS 发送给 littleskin.cn，不保存、不写日志。
+
+# Aurora Launcher v0.4.3（历史）
 
 第三方启动器的微软登录需要**自己注册并通过 Mojang 审核**的 Client ID。本版把这条路径做成可操作的功能，并明确不冒用他人凭据：
 

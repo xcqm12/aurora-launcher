@@ -2,6 +2,7 @@ mod auth;
 mod launch;
 mod loaders;
 mod packs;
+mod yggdrasil;
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -2365,6 +2366,7 @@ async fn launch_instance(
         user_type: account.user_type,
         client_id: account.client_id,
         xuid: account.xuid,
+        authlib: account.authlib,
         download_source: settings.download_source,
         proxy: settings.proxy,
     };
@@ -2544,6 +2546,25 @@ async fn ms_check_client_id(
     auth::check_client_id(&app, &client_id).await
 }
 
+#[tauri::command]
+async fn yggdrasil_login(
+    app: tauri::AppHandle,
+    server: String,
+    username: String,
+    password: String,
+) -> Result<yggdrasil::LoginOutcome, String> {
+    yggdrasil::login(&app, &server, &username, &password).await
+}
+
+#[tauri::command]
+fn yggdrasil_select(
+    app: tauri::AppHandle,
+    pending_id: String,
+    profile_id: String,
+) -> Result<auth::AccountView, String> {
+    yggdrasil::select(&app, &pending_id, &profile_id)
+}
+
 pub fn smoke_launch(
     shared_root: &str,
     version_id: &str,
@@ -2574,6 +2595,7 @@ pub fn smoke_launch(
         user_type: "legacy".into(),
         client_id: String::new(),
         xuid: String::new(),
+        authlib: None,
         download_source: "official".into(),
         proxy: String::new(),
     };
@@ -2758,7 +2780,9 @@ pub fn run() {
             remove_account,
             ms_start_login,
             ms_poll_login,
-            ms_check_client_id
+            ms_check_client_id,
+            yggdrasil_login,
+            yggdrasil_select
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aurora Launcher");

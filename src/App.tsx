@@ -44,6 +44,7 @@ import {
   ResourceFile,
   ResourceVersion,
   VersionManifest,
+  YggdrasilProfile,
 } from "./api";
 
 type View = "home" | "browse" | "instances" | "loaders" | "settings";
@@ -1933,6 +1934,12 @@ function SettingsPage({
   const [pollHint, setPollHint] = useState<string | null>(null);
   const [checkingClient, setCheckingClient] = useState(false);
   const [clientCheck, setClientCheck] = useState("");
+  const [lsUsername, setLsUsername] = useState("");
+  const [lsPassword, setLsPassword] = useState("");
+  const [lsProfiles, setLsProfiles] = useState<YggdrasilProfile[]>([]);
+  const [lsPendingId, setLsPendingId] = useState<string | null>(null);
+  const [lsSelected, setLsSelected] = useState("");
+  const [lsBusy, setLsBusy] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState("");
@@ -2041,6 +2048,51 @@ function SettingsPage({
     await api
       .openExternal("https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade")
       .catch((error) => onNotice(String(error)));
+  };
+
+  const loginLittleskin = async () => {
+    if (!lsUsername.trim() || !lsPassword) {
+      onNotice("请填写 LittleSkin 邮箱/用户名和密码");
+      return;
+    }
+    setLsBusy(true);
+    try {
+      const result = await api.yggdrasilLogin("", lsUsername.trim(), lsPassword);
+      if (result.account) {
+        setLsPassword("");
+        setLsProfiles([]);
+        setLsPendingId(null);
+        await loadAccounts();
+        onNotice(`LittleSkin 登录成功：${result.account.name}`);
+      } else if (result.pending_id) {
+        setLsProfiles(result.profiles);
+        setLsPendingId(result.pending_id);
+        setLsSelected(result.profiles[0]?.id ?? "");
+      } else {
+        onNotice("LittleSkin 登录失败：服务器没有返回角色");
+      }
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setLsBusy(false);
+    }
+  };
+
+  const finishLittleskin = async () => {
+    if (!lsPendingId || !lsSelected) return;
+    setLsBusy(true);
+    try {
+      const account = await api.yggdrasilSelect(lsPendingId, lsSelected);
+      setLsPassword("");
+      setLsProfiles([]);
+      setLsPendingId(null);
+      await loadAccounts();
+      onNotice(`LittleSkin 登录成功：${account.name}`);
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setLsBusy(false);
+    }
   };
 
   const toggleSakura = async (enabled: boolean) => {
@@ -2238,7 +2290,7 @@ function SettingsPage({
             <div className={`account-row ${account.active ? "active" : ""}`} key={account.id}>
               <div>
                 <strong>{account.name}</strong>
-                <small>{account.kind === "microsoft" ? "微软正版" : "离线"} · {account.uuid}</small>
+                <small>{account.kind === "microsoft" ? "微软正版" : account.kind === "yggdrasil" ? "LittleSkin" : "离线"} · {account.uuid}</small>
               </div>
               {account.active ? (
                 <span className="pill mini">当前</span>
@@ -2316,6 +2368,49 @@ function SettingsPage({
             )}
           </div>
         )}
+        <div className="external-login">
+          <h4>LittleSkin 登录（外置 Yggdrasil）</h4>
+          <div className="inline-field">
+            <input
+              value={lsUsername}
+              onChange={(event) => setLsUsername(event.target.value)}
+              placeholder="LittleSkin 邮箱或用户名"
+              spellCheck={false}
+              autoComplete="username"
+            />
+            <input
+              type="password"
+              value={lsPassword}
+              onChange={(event) => setLsPassword(event.target.value)}
+              placeholder="密码（只发送给 littleskin.cn，不保存）"
+              autoComplete="current-password"
+            />
+            <button className="primary-button" onClick={() => void loginLittleskin()} disabled={lsBusy}>
+              {lsBusy ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />} 登录
+            </button>
+          </div>
+          {lsProfiles.length > 1 && (
+            <div className="inline-field">
+              <select value={lsSelected} onChange={(event) => setLsSelected(event.target.value)}>
+                {lsProfiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="ghost-button"
+                onClick={() => void finishLittleskin()}
+                disabled={lsBusy || !lsPendingId}
+              >
+                使用该角色
+              </button>
+            </div>
+          )}
+          <p className="security-note">
+            通过 authlib-injector 接入 Yggdrasil；角色与皮肤来自 littleskin.cn。密码不会保存，登录令牌使用 DPAPI 加密存放在本机。
+          </p>
+        </div>
       </section>
 
       <section className="settings-card">

@@ -70,8 +70,8 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成
 ## 账户
 
 - 离线：用户名 1-16 位字母数字/下划线；UUID 使用 `OfflinePlayer:<name>` 的 MD5 并设置版本/变体位。
-- 微软：Azure 应用注册选择“移动和桌面应用”，启用“允许公共客户端流”，加入 Minecraft API 权限；在设置页填 Client ID 后点击微软登录，按提示访问 `microsoft.com/link` 并输入设备码。
-- 刷新令牌 DPAPI 加密存于 `%APPDATA%\com.aurora.launcher\accounts.json`；访问令牌仅内存。
+- 微软：Azure 应用注册选择包含个人 Microsoft 账户的账户类型，添加 Web 平台重定向 `https://www.microsoft.com/link` 并启用“允许公共客户端流”；不需要在门户添加 API 权限。设置页填 Client ID 后点微软登录，按提示访问 `microsoft.com/link` 并输入设备码。
+- 刷新令牌与 Minecraft 访问令牌均 DPAPI 加密存于 `%APPDATA%\com.aurora.launcher\accounts.json`。
 
 ## 镜像与代理
 
@@ -179,9 +179,15 @@ Azure 注册要点（按教程顺序）：
 1. 账户类型选“任何组织目录中的账户和个人 Microsoft 账户”。只选组织账户会在 `consumers` 端点返回 `AADSTS700016`。
 2. “身份验证”里添加平台 **Web**，重定向 URI 填 `https://www.microsoft.com/link`；打开“允许公共客户端流”。不要创建客户端密钥。
 3. “品牌与属性”中应用名称、徽标、说明为必填，否则可能注册失败。
-4. API 权限加 `XboxLive.signin`、`offline_access`（委托权限，无需管理员同意）。
+4. **不需要**在“API 权限”里添加任何权限。`XboxLive.signin` 属于 Xbox Live 服务（`https://xboxlive.com`），`offline_access` 是 OIDC 标准 scope，两者都在登录请求的 `scope` 参数里动态申请；门户的“添加权限”列表里搜不到它们是正常的，不是配置遗漏。不要为了“凑权限”去加 Microsoft Graph 的 `User.Read` 等无关项。
 5. 未通过审核的 Client ID 可能直接返回 404，可在 <https://aka.ms/mce-reviewappid> 提交应用审核。
 6. 公开分发的启动器不要把 Client ID 硬编码进仓库，用上面的 Secret 注入方式。
+
+关于 `scope` 与门户权限的区别：
+
+- Azure 门户的“API 权限”只列出暴露给第三方的资源权限（主要是 Microsoft Graph）。Xbox Live 不在其中，所以搜不到 `XboxLive.signin` 是设计如此，不是漏配。
+- 代码在设备码请求里写 `scope=XboxLive.signin offline_access`（`src-tauri/src/auth.rs`），AAD 按请求里的资源动态授权；首次登录的同意页会显示 Xbox Live 访问，以及 `offline_access` 对应的“维护你已授权数据的访问权限”，后者用于拿刷新令牌。
+- 不需要管理员同意：`consumers` 租户下都是个人账户，没有管理员角色。
 
 登录失败排查：
 
@@ -190,6 +196,7 @@ Azure 注册要点（按教程顺序）：
 | 设置页提示“未配置微软 Client ID” | 三处都为空：设置页、`AURORA_MS_CLIENT_ID`、构建注入。 |
 | `AADSTS700016` | Client ID 拼错，或应用账户类型不含个人账户。 |
 | `AADSTS7000218` / `7000215` | 未启用“允许公共客户端流”，或缺少 Web 平台。 |
+| 添加权限里搜不到 `XboxLive.signin` / `offline_access` | 正常：它们是运行时 scope，不是门户权限，不需要添加（见下方说明）。 |
 | HTTP 404 | Client ID 未过 Minecraft 应用审核，去 aka.ms/mce-reviewappid 申请。 |
 | `bad_verification_code` | 设备码已被使用或换了 Client ID，重新点击登录。 |
 | `no_license` | 账户没有 Java 版所有权或 Game Pass 过期，界面按钮可跳转商店。 |

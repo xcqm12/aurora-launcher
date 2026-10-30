@@ -1,6 +1,12 @@
 # Aurora Launcher
 
-Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录；0.4.5 增加 LittleSkin OAuth 授权登录并消除子进程控制台窗口。
+Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录；0.4.5 增加 LittleSkin OAuth 授权登录并消除子进程控制台窗口；0.4.6 补上 LittleSkin 应用管理与白名单申请入口。
+
+## 0.4.6 更新内容
+
+- LittleSkin 授权登录旁新增「LittleSkin 应用管理」与「复制白名单申请」按钮：前者打开应用配置页，后者把应用名称、客户端 ID 800、Yggdrasil 权限列表和申请理由复制到剪贴板，可直接粘贴进工单邮件。
+- 说明文字更新为当前状态：回调已配置为 `https://open.littleskin.cn/oauth/callback`，但设备代码流白名单仍需邮件申请；实测未通过时返回 `invalid_client`。
+- README 同步回调配置与实测结果，避免把“改回调”和“通过白名单”混为一谈。
 
 ## 0.4.5 更新内容
 
@@ -170,7 +176,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.5>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.6>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）
 
@@ -251,10 +257,12 @@ LittleSkin 是 Yggdrasil（authlib-injector）体系，和微软登录互不影�
 3. 从返回的 `id_token` 读取 `selectedProfile`，再带 OAuth 访问令牌调用 `POST https://littleskin.cn/api/yggdrasil/authserver/oauth`（body `{"uuid":"<角色 id>"}`），拿到与 Yggdrasil 登录相同结构的 `accessToken` / `clientToken`。
 4. 令牌保存方式与密码登录一致，启动时照常 `validate`/`refresh` 并注入 authlib-injector。
 
-**使用前需要在 LittleSkin 配置（否则会提示 `invalid_client`）**：
+**LittleSkin 侧配置状态**：
 
-- 在 <https://littleskin.cn/user/oauth/manage> 把 OAuth 应用（客户端 ID 800）的回调 URL 改为 `https://open.littleskin.cn/oauth/callback`。
-- 用绑定邮箱向 `support@littlesk.in` 发工单，标题「申请 OAuth 设备代码流白名单」，正文写应用名称、客户端 ID 800 和 Yggdrasil 权限列表。初次通过通常是测试模式，仅应用创建者能授权；正式使用需再次申请解除。
+- 回调 URL 已配置为 `https://open.littleskin.cn/oauth/callback`（2026-10-30 确认），符合设备代码流要求。
+- 但白名单仍未通过：实测 `POST https://open.littleskin.cn/oauth/device_code` 仍返回 `{"error":"invalid_client","error_description":"Client was not found or not whitelisted"}`。白名单与回调是两项独立要求，改回调不会自动获得授权。
+- 用绑定邮箱向 `support@littlesk.in` 发工单，标题「申请 OAuth 设备代码流白名单」，正文写应用名称、客户端 ID 800 和 Yggdrasil 权限列表（`Yggdrasil.MinecraftToken.Create`、`Yggdrasil.PlayerProfiles.Select`）。初次通过通常是测试模式，仅应用创建者能授权；正式使用需再次申请解除。
+- 设置页「复制白名单申请」按钮可直接生成上述邮件正文；「LittleSkin 应用管理」按钮打开应用配置页。
 - 设备代码流**不需要客户端 Secret**，所以本项目不内置 Secret。图中的 Secret 已出现在对话里，建议在应用管理页重置。
 
 限制：界面只提供 LittleSkin 预设，后端 `normalize_server` 支持其他 https Yggdrasil 服务器；微软正版账户与外置登录账户是两个独立账户类型，不能混用。
@@ -262,7 +270,7 @@ LittleSkin 是 Yggdrasil（authlib-injector）体系，和微软登录互不影�
 ## Cloudflare 锁区网关（qlmtest.dpdns.org）
 
 - 域名已托管在 Cloudflare（NS：fred/magali.ns.cloudflare.com），是独立 zone，不是 dpdns.org 的子记录。
-- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.5 Release 资产回源，`PATH_PREFIX=/aurora`。
+- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.6 Release 资产回源，`PATH_PREFIX=/aurora`。
 - 本地已验证：CN 请求 403，其他地区 200 且回源到正确的 Release 资产 URL。
 - **尚未部署**：需要 Cloudflare 凭据。你提供的 32 位 Key 是 Global API Key（需配邮箱、全账号权限，不推荐），建议在 Cloudflare 面板创建 Scoped Token（Workers Scripts:Edit、Zone Workers Routes:Edit、DNS:Edit、Zone:Read，范围限 qlmtest.dpdns.org），然后：
 

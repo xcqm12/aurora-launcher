@@ -1,4 +1,10 @@
-# Aurora Launcher v0.4.5
+# Aurora Launcher v0.4.6
+
+- 设置页 LittleSkin 授权登录新增「LittleSkin 应用管理」与「复制白名单申请」按钮：一键打开 OAuth 应用配置页，或把应用名称、客户端 ID 800、Yggdrasil 权限列表与申请理由复制到剪贴板。
+- 说明文字更新为当前状态：回调已配置为 https://open.littleskin.cn/oauth/callback，但设备代码流白名单仍需邮件申请；未通过时接口返回 invalid_client。
+- README 记录实测结果，区分“改回调”与“通过白名单”两件事。
+
+# Aurora Launcher v0.4.5（历史）
 
 - 新增 LittleSkin OAuth 授权登录（设备代码流，客户端 ID 800）：浏览器授权并选角色，再用 `authserver/oauth` 换取 Minecraft 令牌，无需密码与客户端 Secret。
 - 授权失败会提示可执行原因：未加入设备代码流白名单（回调需设为 https://open.littleskin.cn/oauth/callback 并发送工单）、scope 冲突、授权过期等；初次通过多为测试模式，仅创建者可授权。

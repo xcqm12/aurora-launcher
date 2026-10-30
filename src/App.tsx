@@ -2131,6 +2131,27 @@ function SettingsPage({
       .catch((error) => onNotice(String(error)));
   };
 
+  const openLsOauthManage = () => {
+    void api
+      .openExternal("https://littleskin.cn/user/oauth/manage")
+      .catch((error) => onNotice(String(error)));
+  };
+
+  const copyWhitelistTemplate = () => {
+    const template = [
+      "应用名称：aurora-launcher",
+      "客户端 ID：800",
+      "申请权限列表：",
+      "Yggdrasil.MinecraftToken.Create",
+      "Yggdrasil.PlayerProfiles.Select",
+      "申请理由：Minecraft 启动器通过 OAuth 设备代码流实现 LittleSkin 外置登录。",
+    ].join("\n");
+    void navigator.clipboard
+      ?.writeText(template)
+      .then(() => onNotice("白名单申请内容已复制，可粘贴到邮件正文"))
+      .catch(() => onNotice("复制失败，请手动填写：应用 aurora-launcher / 客户端 ID 800"));
+  };
+
   useEffect(() => {
     if (!lsOauth) return;
     let cancelled = false;
@@ -2454,8 +2475,18 @@ function SettingsPage({
             </button>
           </div>
           <p className="security-note">
-            授权登录走 LittleSkin OAuth 设备代码流，不输入密码；应用需要先在 LittleSkin 申请设备代码流白名单，未通过时会显示具体原因。
+            授权登录走 LittleSkin OAuth 设备代码流，不输入密码。应用回调需为
+            https://open.littleskin.cn/oauth/callback（当前已配置）；若提示 invalid_client，
+            说明设备代码流白名单尚未通过，可用下方按钮复制申请内容。
           </p>
+          <div className="settings-actions">
+            <button className="ghost-button" onClick={openLsOauthManage}>
+              <ExternalLink size={15} /> LittleSkin 应用管理
+            </button>
+            <button className="ghost-button" onClick={copyWhitelistTemplate}>
+              复制白名单申请
+            </button>
+          </div>
           {lsOauth && (
             <div className="device-code">
               <p>

@@ -19,7 +19,7 @@ const OAUTH_CLIENT_ID: &str = "800";
 const OAUTH_DEVICE_URL: &str = "https://open.littleskin.cn/oauth/device_code";
 const OAUTH_TOKEN_URL: &str = "https://open.littleskin.cn/oauth/token";
 const OAUTH_SCOPE: &str =
-    "openid Yggdrasil.PlayerProfiles.Select Yggdrasil.MinecraftToken.Create";
+    "openid offline_access Yggdrasil.PlayerProfiles.Select Yggdrasil.MinecraftToken.Create";
 const OAUTH_WHITELIST_HINT: &str = "应用未加入 LittleSkin 设备代码流白名单：请把 OAuth 应用的回调 URL 设为 https://open.littleskin.cn/oauth/callback，并用绑定邮箱发工单（标题：申请 OAuth 设备代码流白名单，正文写应用名称与客户端 ID 800 及 Yggdrasil 权限）。";
 const PENDING_TTL: Duration = Duration::from_secs(600);
 
@@ -297,6 +297,7 @@ fn build_account(
     access_token: &str,
     client_token: &str,
     profile: &ProfileView,
+    oauth_refresh: Option<&str>,
 ) -> Result<Account, String> {
     let uuid = dash_uuid(&profile.id);
     Ok(Account {
@@ -307,11 +308,22 @@ fn build_account(
         xuid: String::new(),
         access_token: auth::protect(access_token)?,
         expires_at: 0,
-        refresh_token_enc: String::new(),
+        refresh_token_enc: match oauth_refresh {
+            Some(value) if !value.is_empty() => auth::protect(value)?,
+            _ => String::new(),
+        },
         server: server.to_string(),
         client_token: client_token.to_string(),
         metadata: metadata.to_string(),
     })
+}
+
+fn unsigned_uuid(value: &str) -> String {
+    value
+        .chars()
+        .filter(|item| item.is_ascii_hexdigit())
+        .collect::<String>()
+        .to_ascii_lowercase()
 }
 
 pub async fn login(
@@ -341,7 +353,14 @@ pub async fn login(
         }
     });
     if let Some(profile) = chosen {
-        let account = build_account(&server, &metadata, &access_token, &client_token, &profile)?;
+        let account = build_account(
+            &server,
+            &metadata,
+            &access_token,
+            &client_token,
+            &profile,
+            None,
+        )?;
         let view = auth::upsert(app, account)?;
         return Ok(LoginOutcome {
             account: Some(view),
@@ -395,6 +414,7 @@ pub fn select(
         &pending.access_token,
         &pending.client_token,
         profile,
+        None,
     )?;
     auth::upsert(app, account)
 }
@@ -568,6 +588,10 @@ pub async fn oauth_poll(
         .and_then(|item| item.as_str())
         .ok_or_else(|| "LittleSkin 授权响应缺少 access_token".to_string())?
         .to_string();
+    let oauth_refresh = value
+        .get("refresh_token")
+        .and_then(|item| item.as_str())
+        .map(str::to_string);
     let profile = value
         .get("id_token")
         .and_then(|item| item.as_str())
@@ -575,50 +599,19 @@ pub async fn oauth_poll(
         .ok_or_else(|| {
             "授权成功，但 ID 令牌没有 selectedProfile。请确认应用申请了 Yggdrasil.PlayerProfiles.Select，并在授权页选择角色。".to_string()
         })?;
-    let mc_response = client
-        .post("https://littleskin.cn/api/yggdrasil/authserver/oauth")
-        .bearer_auth(&oauth_access)
-        .json(&serde_json::json!({ "uuid": profile.id }))
-        .timeout(Duration::from_secs(30))
-        .send()
-        .await
-        .map_err(|e| format!("创建 Minecraft 令牌失败：{e}"))?;
-    let mc_status = mc_response.status();
-    let mc: serde_json::Value = mc_response.json().await.unwrap_or_default();
-    if !mc_status.is_success() {
-        let message = mc
-            .get("errorMessage")
-            .and_then(|item| item.as_str())
-            .unwrap_or("无法创建 Minecraft 令牌");
-        let hint = match mc_status.as_u16() {
-            401 | 403 => "（请确认应用已获得 Yggdrasil.MinecraftToken.Create 权限）",
-            _ => "",
+    let (access_token, client_token, selected) =
+        match create_minecraft_token(&client, &oauth_access, &unsigned_uuid(&profile.id)).await {
+            Ok(value) => value,
+            Err(message) => {
+                return Ok(OauthPoll {
+                    status: "error".into(),
+                    terminal: true,
+                    message,
+                    account: None,
+                })
+            }
         };
-        return Ok(OauthPoll {
-            status: "error".into(),
-            terminal: true,
-            message: format!("创建 Minecraft 令牌失败：{message}{hint}"),
-            account: None,
-        });
-    }
-    let access_token = mc
-        .get("accessToken")
-        .and_then(|item| item.as_str())
-        .ok_or_else(|| "Minecraft 令牌响应缺少 accessToken".to_string())?
-        .to_string();
-    let client_token = mc
-        .get("clientToken")
-        .and_then(|item| item.as_str())
-        .unwrap_or_default()
-        .to_string();
-    let selected = mc
-        .get("selectedProfile")
-        .and_then(|item| serde_json::from_value::<RawProfile>(item.clone()).ok())
-        .map(|item| ProfileView {
-            id: item.id,
-            name: item.name,
-        })
-        .unwrap_or(profile);
+    let selected = selected.unwrap_or(profile);
     let metadata = fetch_metadata(&client, DEFAULT_SERVER)
         .await
         .unwrap_or_default();
@@ -628,6 +621,7 @@ pub async fn oauth_poll(
         &access_token,
         &client_token,
         &selected,
+        oauth_refresh.as_deref(),
     )?;
     let view = auth::upsert(app, account)?;
     Ok(OauthPoll {
@@ -636,6 +630,98 @@ pub async fn oauth_poll(
         message: "LittleSkin 授权登录成功".into(),
         account: Some(view),
     })
+}
+
+async fn create_minecraft_token(
+    client: &reqwest::Client,
+    oauth_access: &str,
+    uuid: &str,
+) -> Result<(String, String, Option<ProfileView>), String> {
+    let response = client
+        .post("https://littleskin.cn/api/yggdrasil/authserver/oauth")
+        .bearer_auth(oauth_access)
+        .json(&serde_json::json!({ "uuid": uuid }))
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("创建 Minecraft 令牌失败：{e}"))?;
+    let status = response.status();
+    let value: serde_json::Value = response.json().await.unwrap_or_default();
+    if !status.is_success() {
+        let message = value
+            .get("errorMessage")
+            .and_then(|item| item.as_str())
+            .unwrap_or("无法创建 Minecraft 令牌");
+        let hint = match status.as_u16() {
+            401 | 403 => "（请确认应用已获得 Yggdrasil.MinecraftToken.Create 权限）",
+            _ => "",
+        };
+        return Err(format!("创建 Minecraft 令牌失败：{message}{hint}"));
+    }
+    let access = value
+        .get("accessToken")
+        .and_then(|item| item.as_str())
+        .ok_or_else(|| "Minecraft 令牌响应缺少 accessToken".to_string())?
+        .to_string();
+    let client_token = value
+        .get("clientToken")
+        .and_then(|item| item.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let selected = value
+        .get("selectedProfile")
+        .and_then(|item| serde_json::from_value::<RawProfile>(item.clone()).ok())
+        .map(|item| ProfileView {
+            id: item.id,
+            name: item.name,
+        });
+    Ok((access, client_token, selected))
+}
+
+async fn refresh_oauth(
+    client: &reqwest::Client,
+    refresh_token: &str,
+) -> Result<(String, Option<String>), String> {
+    let response = client
+        .post(OAUTH_TOKEN_URL)
+        .header("Accept", "application/json")
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", OAUTH_CLIENT_ID),
+        ])
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("刷新 LittleSkin 授权失败：{e}"))?;
+    let status = response.status();
+    let value: serde_json::Value = response.json().await.unwrap_or_default();
+    if !status.is_success() {
+        let error = value
+            .get("error")
+            .and_then(|item| item.as_str())
+            .unwrap_or("unknown");
+        let description = value
+            .get("error_description")
+            .and_then(|item| item.as_str())
+            .unwrap_or_default();
+        let message = if description.is_empty() {
+            error.to_string()
+        } else {
+            format!("{error}：{description}")
+        };
+        return Err(message);
+    }
+    let access = value
+        .get("access_token")
+        .and_then(|item| item.as_str())
+        .ok_or_else(|| "刷新响应缺少 access_token".to_string())?
+        .to_string();
+    let next_refresh = value
+        .get("refresh_token")
+        .and_then(|item| item.as_str())
+        .map(str::to_string);
+    Ok((access, next_refresh))
 }
 
 async fn ensure_jar(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -729,13 +815,38 @@ pub async fn prepare_launch(
     match validate(&client, &server, &access, &current.client_token).await {
         Ok(true) => {}
         Ok(false) => {
-            let (new_access, new_client) =
-                refresh(&client, &server, &access, &current.client_token).await?;
-            current.access_token = auth::protect(&new_access)?;
-            if !new_client.is_empty() {
-                current.client_token = new_client;
+            match refresh(&client, &server, &access, &current.client_token).await {
+                Ok((new_access, new_client)) => {
+                    current.access_token = auth::protect(&new_access)?;
+                    if !new_client.is_empty() {
+                        current.client_token = new_client;
+                    }
+                    changed = true;
+                }
+                Err(err) => {
+                    if current.refresh_token_enc.is_empty() {
+                        return Err(format!("LittleSkin 登录已失效，请重新登录：{err}"));
+                    }
+                    let oauth_refresh_token = auth::unprotect(&current.refresh_token_enc)?;
+                    let (oauth_access, next_refresh) =
+                        refresh_oauth(&client, &oauth_refresh_token)
+                            .await
+                            .map_err(|e| format!("LittleSkin 授权已失效，请重新授权登录：{e}"))?;
+                    let (mc_access, mc_client, _) =
+                        create_minecraft_token(&client, &oauth_access, &unsigned_uuid(&current.uuid))
+                            .await?;
+                    current.access_token = auth::protect(&mc_access)?;
+                    if !mc_client.is_empty() {
+                        current.client_token = mc_client;
+                    }
+                    if let Some(next) = next_refresh {
+                        if !next.is_empty() {
+                            current.refresh_token_enc = auth::protect(&next)?;
+                        }
+                    }
+                    changed = true;
+                }
             }
-            changed = true;
         }
         Err(_) => {}
     }
@@ -810,5 +921,17 @@ mod tests {
         assert!(message.contains("白名单"));
         assert!(message.contains("https://open.littleskin.cn/oauth/callback"));
         assert!(message.contains("800"));
+    }
+
+    #[test]
+    fn uuids_are_normalized_for_the_api() {
+        assert_eq!(
+            unsigned_uuid("A01E3843-E521-3998-958A-F459800E4D11"),
+            "a01e3843e5213998958af459800e4d11"
+        );
+        assert_eq!(
+            unsigned_uuid("a01e3843e5213998958af459800e4d11"),
+            "a01e3843e5213998958af459800e4d11"
+        );
     }
 }

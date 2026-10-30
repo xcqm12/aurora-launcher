@@ -1,4 +1,11 @@
-# Aurora Launcher v0.4.6
+# Aurora Launcher v0.4.7
+
+- LittleSkin OAuth 授权登录申请 `offline_access`，OAuth 刷新令牌与 Yggdrasil 令牌一起 DPAPI 加密保存。
+- Yggdrasil 令牌失效且 `authserver/refresh` 失败时，自动用 OAuth 刷新令牌重新签发 Minecraft 令牌，避免重复扫码；两者都失败才提示重新授权。
+- UUID 统一转为无符号形式再请求 `authserver/oauth`，并补充单元测试。
+- 设备代码流白名单仍未通过时，授权与刷新接口都会返回 `invalid_client`，界面与 README 保持对应提示。
+
+# Aurora Launcher v0.4.6（历史）
 
 - 设置页 LittleSkin 授权登录新增「LittleSkin 应用管理」与「复制白名单申请」按钮：一键打开 OAuth 应用配置页，或把应用名称、客户端 ID 800、Yggdrasil 权限列表与申请理由复制到剪贴板。
 - 说明文字更新为当前状态：回调已配置为 https://open.littleskin.cn/oauth/callback，但设备代码流白名单仍需邮件申请；未通过时接口返回 invalid_client。

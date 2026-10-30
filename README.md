@@ -1,6 +1,13 @@
 # Aurora Launcher
 
-Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录；0.4.5 增加 LittleSkin OAuth 授权登录并消除子进程控制台窗口；0.4.6 补上 LittleSkin 应用管理与白名单申请入口。
+Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录；0.4.5 增加 LittleSkin OAuth 授权登录并消除子进程控制台窗口；0.4.6 补上 LittleSkin 应用管理与白名单申请入口；0.4.7 让 OAuth 登录支持刷新令牌续期。
+
+## 0.4.7 更新内容
+
+- LittleSkin OAuth 授权登录申请 `offline_access`，把 OAuth 刷新令牌与 Yggdrasil 令牌一起 DPAPI 加密保存。
+- 启动前若 Yggdrasil 令牌失效且 `authserver/refresh` 也失败，自动用 OAuth 刷新令牌换新访问令牌并重新调用 `authserver/oauth` 签发 Minecraft 令牌；只有这一步也失败才提示重新授权。
+- 新增 UUID 无符号化处理，确保 `authserver/oauth` 请求与账号 UUID 格式一致；补充对应单元测试。
+- 仍受 LittleSkin 设备代码流白名单限制：未通过时授权与刷新接口都返回 `invalid_client`，README 与界面提示保持原样。
 
 ## 0.4.6 更新内容
 
@@ -176,7 +183,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.6>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.7>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）
 
@@ -252,10 +259,10 @@ LittleSkin 是 Yggdrasil（authlib-injector）体系，和微软登录互不影�
 
 设置页「授权登录（推荐）」使用 LittleSkin 的 OAuth 设备代码流，不收集密码：
 
-1. `POST https://open.littleskin.cn/oauth/device_code`，`client_id=800`，scope 为 `openid Yggdrasil.PlayerProfiles.Select Yggdrasil.MinecraftToken.Create`（`Read` 与 `Select` 互斥，不能同时申请）。
+1. `POST https://open.littleskin.cn/oauth/device_code`，`client_id=800`，scope 为 `openid offline_access Yggdrasil.PlayerProfiles.Select Yggdrasil.MinecraftToken.Create`（`Read` 与 `Select` 互斥，不能同时申请）。
 2. 浏览器打开授权页并输入授权码，在页面上选择角色；启动器每 `interval` 秒轮询 `POST https://open.littleskin.cn/oauth/token`（`grant_type=urn:ietf:params:oauth:grant-type:device_code`）。
 3. 从返回的 `id_token` 读取 `selectedProfile`，再带 OAuth 访问令牌调用 `POST https://littleskin.cn/api/yggdrasil/authserver/oauth`（body `{"uuid":"<角色 id>"}`），拿到与 Yggdrasil 登录相同结构的 `accessToken` / `clientToken`。
-4. 令牌保存方式与密码登录一致，启动时照常 `validate`/`refresh` 并注入 authlib-injector。
+4. 令牌保存方式与密码登录一致，启动时照常 `validate`/`refresh` 并注入 authlib-injector。授权时申请 `offline_access`，OAuth 刷新令牌 DPAPI 加密保存；Yggdrasil 令牌失效时先用它换 OAuth 令牌并重新签发 Minecraft 令牌，避免每次重新扫码。
 
 **LittleSkin 侧配置状态**：
 
@@ -270,7 +277,7 @@ LittleSkin 是 Yggdrasil（authlib-injector）体系，和微软登录互不影�
 ## Cloudflare 锁区网关（qlmtest.dpdns.org）
 
 - 域名已托管在 Cloudflare（NS：fred/magali.ns.cloudflare.com），是独立 zone，不是 dpdns.org 的子记录。
-- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.6 Release 资产回源，`PATH_PREFIX=/aurora`。
+- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.7 Release 资产回源，`PATH_PREFIX=/aurora`。
 - 本地已验证：CN 请求 403，其他地区 200 且回源到正确的 Release 资产 URL。
 - **尚未部署**：需要 Cloudflare 凭据。你提供的 32 位 Key 是 Global API Key（需配邮箱、全账号权限，不推荐），建议在 Cloudflare 面板创建 Scoped Token（Workers Scripts:Edit、Zone Workers Routes:Edit、DNS:Edit、Zone:Read，范围限 qlmtest.dpdns.org），然后：
 

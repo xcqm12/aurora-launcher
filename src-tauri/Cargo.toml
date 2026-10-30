@@ -1,6 +1,6 @@
 [package]
 name = "aurora-launcher"
-version = "0.4.6"
+version = "0.4.7"
 description = "Aurora Minecraft Launcher"
 authors = ["Aurora Launcher"]
 edition = "2021"

@@ -2,6 +2,8 @@
 
 Aurora Launcher 的微软登录需要**你自己注册并获 Mojang 批准**的 Azure 公共客户端 Client ID。这份文档说明为什么、怎么申请、以及申请时该写什么。
 
+> **状态（2026-10-31）**：Aurora 自有应用 `aurora-launcher`（Client ID `ae897ba3-93b3-4998-a4fb-b80bad87b538`）已通过审核并加入允许列表——Mojang Enforcement 回信确认“本批次中您的申请符合所需标准，已获批加入我们的允许列表（白名单），本批次审核中未发现任何封禁/拦截结果”，并说明该团队只处理 appID 白名单、不提供 API 故障排查。启动器已内置该 ID，开箱即可微软登录；本文保留作为申请新应用或续期时的参考。
+
 ## 为什么需要审核
 
 Mojang 对访问《Minecraft: Java Edition》游戏服务 API 的第三方应用做人工审核和白名单（2023 年起）。未获批准的应用即使微软 OAuth、Xbox Live、XSTS 全部成功，也可能在 `login_with_xbox` 或 `/minecraft/profile` 阶段被拒绝（社区报告为 HTTP 403 `Invalid app registration` 或 404）。

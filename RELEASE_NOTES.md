@@ -1,4 +1,11 @@
-# Aurora Launcher v0.4.7
+# Aurora Launcher v0.4.8
+
+- **内置 Aurora 自有 Azure 应用的 Client ID**（ae897ba3-93b3-4998-a4fb-b80bad87b538）。该应用于 2026-10-31 通过 Mojang appID 白名单审核（Mojang Enforcement 邮件确认），微软正版登录开箱即用，不再要求先注册 Azure。
+- 设置页 Client ID 留空即用内置 ID；“验证”按钮在留空时检测内置 ID；设置页、环境变量、构建注入三种覆盖方式不变。
+- 说明与 README 更新：Client ID 非机密可内置；客户端 Secret 绝不入库（设备码流程不需要）。
+- LittleSkin 设备代码流白名单仍未通过（实测仍 invalid_client），密码登录不受影响。
+
+# Aurora Launcher v0.4.7（历史）
 
 - LittleSkin OAuth 授权登录申请 `offline_access`，OAuth 刷新令牌与 Yggdrasil 令牌一起 DPAPI 加密保存。
 - Yggdrasil 令牌失效且 `authserver/refresh` 失败时，自动用 OAuth 刷新令牌重新签发 Minecraft 令牌，避免重复扫码；两者都失败才提示重新授权。

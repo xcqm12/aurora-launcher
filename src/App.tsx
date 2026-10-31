@@ -2360,7 +2360,7 @@ function SettingsPage({
             <input
               value={msClientId}
               onChange={(event) => setMsClientId(event.target.value)}
-              placeholder="在 Azure 应用注册中创建公共客户端后填写"
+              placeholder="留空使用内置的 Aurora 官方 Client ID（已过审）"
               spellCheck={false}
             />
             <button className="ghost-button" onClick={() => void saveMsClient()}>保存</button>
@@ -2370,9 +2370,10 @@ function SettingsPage({
           </div>
         </label>
         <p className="security-note">
+          已内置 Aurora 自有 Azure 应用（ae897ba3-93b3-4998-a4fb-b80bad87b538）并已通过 Mojang
+          appID 白名单审核，可直接点击“微软登录”。想用自己的应用时才需要填写：
           账户类型选“个人 Microsoft 账户”，添加 Web 平台重定向 https://www.microsoft.com/link
-          并允许公共客户端流；通过 Mojang 应用审核后才能读取 Minecraft 档案。审核材料见
-          docs/mce-review-application.md。
+          并允许公共客户端流，材料见 docs/mce-review-application.md。
         </p>
         <div className="settings-actions">
           <button className="ghost-button" onClick={() => void openAzureApps()}>

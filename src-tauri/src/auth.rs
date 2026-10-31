@@ -196,7 +196,12 @@ pub async fn check_client_id(
     app: &tauri::AppHandle,
     value: &str,
 ) -> Result<ClientIdCheck, String> {
-    let client_id = normalize_client_id(value)?;
+    let builtin = value.trim().is_empty();
+    let client_id = if builtin {
+        client_id(app)?
+    } else {
+        normalize_client_id(value)?
+    };
     let client = http_client(app)?;
     let response = client
         .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode")
@@ -211,10 +216,12 @@ pub async fn check_client_id(
         .map_err(|e| format!("验证 Client ID 失败：{e}"))?;
     let status = response.status();
     if status.is_success() {
-        return Ok(ClientIdCheck {
-            ok: true,
-            message: "Client ID 可用：支持个人账户的设备码登录。能否读取 Minecraft 档案取决于该应用是否已通过 Mojang 审核，这一步只能在实际登录时验证。".into(),
-        });
+        let message = if builtin {
+            "内置 Client ID 可用：支持个人账户的设备码登录，且已通过 Mojang appID 白名单审核。".into()
+        } else {
+            "Client ID 可用：支持个人账户的设备码登录。能否读取 Minecraft 档案取决于该应用是否已通过 Mojang 审核，这一步只能在实际登录时验证。".into()
+        };
+        return Ok(ClientIdCheck { ok: true, message });
     }
     let value: serde_json::Value = response.json().await.unwrap_or_default();
     let description = value
@@ -394,6 +401,11 @@ pub fn remove(app: &tauri::AppHandle, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Aurora 在 Azure 的自有应用（显示名 aurora-launcher），已通过 Mojang appID
+/// 白名单审核（2026-10-31 邮件确认）。Client ID 本身不是机密，可作为默认值
+/// 内置；设置页与环境变量仍可覆盖。
+const DEFAULT_CLIENT_ID: &str = "ae897ba3-93b3-4998-a4fb-b80bad87b538";
+
 fn client_id(app: &tauri::AppHandle) -> Result<String, String> {
     let configured = read_settings(app).ms_client_id;
     if !configured.trim().is_empty() {
@@ -409,7 +421,7 @@ fn client_id(app: &tauri::AppHandle) -> Result<String, String> {
             return Ok(value.trim().to_string());
         }
     }
-    Err("未配置微软 Client ID。请先在 Azure 注册公共客户端应用，并在设置中填写 Client ID。".into())
+    Ok(DEFAULT_CLIENT_ID.to_string())
 }
 
 pub async fn start_login(app: &tauri::AppHandle) -> Result<DeviceCode, String> {

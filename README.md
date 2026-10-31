@@ -1,6 +1,14 @@
 # Aurora Launcher
 
-Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录；0.4.5 增加 LittleSkin OAuth 授权登录并消除子进程控制台窗口；0.4.6 补上 LittleSkin 应用管理与白名单申请入口；0.4.7 让 OAuth 登录支持刷新令牌续期。
+Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录；0.4.5 增加 LittleSkin OAuth 授权登录并消除子进程控制台窗口；0.4.6 补上 LittleSkin 应用管理与白名单申请入口；0.4.7 让 OAuth 登录支持刷新令牌续期；0.4.8 内置已过审的微软 Client ID，开箱可正版登录。
+
+## 0.4.8 更新内容
+
+- **内置 Aurora 自有 Azure 应用的 Client ID**（`ae897ba3-93b3-4998-a4fb-b80bad87b538`）。该应用于 2026-10-31 通过 Mojang appID 白名单审核（Mojang Enforcement 邮件确认，未发现封禁/拦截结果），微软设备码登录**开箱即用**，不再要求用户先注册 Azure。
+- 设置页 Client ID 输入框留空即用内置 ID；设置页、环境变量、构建注入三种覆盖方式保持不变，“验证”按钮在输入框为空时检测内置 ID。
+- 更新设置页说明与 README：Client ID 不是机密可以内置，但客户端 Secret 仍然绝不入库（设备码流程不需要它）。
+- Azure 侧配置记录：账户类型“所有 Microsoft 账户”、1 个 Web 重定向 URI（设备码流程实际不需要回调）、未创建任何客户端密钥。
+- LittleSkin 设备代码流白名单仍未通过（2026-10-31 实测仍返回 `invalid_client`），该申请继续等待；密码登录不受影响。
 
 ## 0.4.7 更新内容
 
@@ -81,7 +89,7 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成
 
 ## 尚未实现 / 限制
 
-- **微软登录需要你自己的 Azure 公共客户端 Client ID**。不存在可合法复用的公共 ID；设置页填写，未填写时只支持离线账户。
+- **微软登录已内置自有 Client ID（ae897ba3-93b3-4998-a4fb-b80bad87b538，已过 Mojang appID 白名单）**，开箱可用；想用自己的应用时在设置页覆盖。
 - OptiFine、LabyMod、LiteLoader 没有稳定无头安装接口，继续手动导入；不伪装自动安装。
 - 服务端锁区只交付 Worker 模板，未部署；GitHub Release 资产仍公开，真正强制需要把资产放到 Worker 后面的源站。
 - 本机签名使用自签名证书，只在本机信任；公开信任需要 CA 证书或云签名服务。
@@ -178,12 +186,12 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 10. Fabric 自动安装验证：生成 `fabric-loader-0.16.0-1.20.1` 并成功启动。
 11. BMCLAPI 是重定向/签名层且 JSON 内仍是 Mojang URL：必须由客户端映射主机，不能缓存签名 URL。
 12. OptiFine 下载依赖广告页 token、LabyMod 对非浏览器返回 403、LiteLoader 已停更：不做自动安装。
-13. 微软没有第三方可用公共 Client ID：必须由使用者注册 Azure 应用。
+13. 微软不存在可合法复用的第三方公共 Client ID：Aurora 现已内置自有 Azure 应用（2026-10-31 过 Mojang 审核），第三方启动器仍需自行注册。
 
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.7>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.8>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）
 
@@ -199,20 +207,22 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 - 无许可证时返回 `no_license`，界面提供“打开 Minecraft 商店”；有游戏但无档案时提示先创建档案。
 - MC access token 与刷新令牌均 DPAPI 加密落盘；日志不打印任何令牌。
 
-Client ID 配置（三选一，均不内置第三方 ID）：
+Client ID 配置：
 
-1. 设置页填写（保存到 settings.json）。
+**已内置 Aurora 自有 Azure 应用的 Client ID**（显示名 `aurora-launcher`，ID `ae897ba3-93b3-4998-a4fb-b80bad87b538`，账户类型为所有 Microsoft 账户）。该应用于 2026-10-31 收到 Mojang Enforcement 邮件，确认已加入 appID 允许列表（API 白名单），因此**开箱即可使用微软登录**，无需任何配置。设置页的 Client ID 输入框留空即使用内置 ID；仍然支持三处覆盖：
+
+1. 设置页填写自己的 Client ID（保存到 settings.json，优先级最高）。
 2. 环境变量 `AURORA_MS_CLIENT_ID`。
 3. 构建时注入：GitHub Secret `AURORA_MS_CLIENT_ID`，CI 传入 `--env`，编译进二进制（`option_env!`）。
 
-Azure 注册要点（按教程顺序）：
+Azure 注册要点（给自己申请新应用时参考）：
 
 1. 账户类型选“任何组织目录中的账户和个人 Microsoft 账户”。只选组织账户会在 `consumers` 端点返回 `AADSTS700016`。
 2. “身份验证”里添加平台 **Web**，重定向 URI 填 `https://www.microsoft.com/link`；打开“允许公共客户端流”。不要创建客户端密钥。
 3. “品牌与属性”中应用名称、徽标、说明为必填，否则可能注册失败。
 4. **不需要**在“API 权限”里添加任何权限。`XboxLive.signin` 属于 Xbox Live 服务（`https://xboxlive.com`），`offline_access` 是 OIDC 标准 scope，两者都在登录请求的 `scope` 参数里动态申请；门户的“添加权限”列表里搜不到它们是正常的，不是配置遗漏。不要为了“凑权限”去加 Microsoft Graph 的 `User.Read` 等无关项。
 5. 未通过审核的 Client ID 可能直接返回 404，可在 <https://aka.ms/mce-reviewappid> 提交应用审核。
-6. 公开分发的启动器不要把 Client ID 硬编码进仓库，用上面的 Secret 注入方式。
+6. Client ID 本身不是机密，可以内置；但**客户端密钥（Secret）绝不能写入仓库**——公共客户端设备码流程不需要它。
 
 关于 `scope` 与门户权限的区别：
 
@@ -224,8 +234,7 @@ Azure 注册要点（按教程顺序）：
 
 | 现象 | 原因与处理 |
 | --- | --- |
-| 设置页提示“未配置微软 Client ID” | 三处都为空：设置页、`AURORA_MS_CLIENT_ID`、构建注入。 |
-| `AADSTS700016` | Client ID 拼错，或应用账户类型不含个人账户。 |
+| `AADSTS700016` | Client ID 拼错，或应用账户类型不含个人账户（设置页填了自定义 ID 时检查）。 |
 | `AADSTS7000218` / `7000215` | 未启用“允许公共客户端流”，或缺少 Web 平台。 |
 | 添加权限里搜不到 `XboxLive.signin` / `offline_access` | 正常：它们是运行时 scope，不是门户权限，不需要添加（见下方说明）。 |
 | HTTP 404 | Client ID 未过 Minecraft 应用审核，去 aka.ms/mce-reviewappid 申请。 |
@@ -277,7 +286,7 @@ LittleSkin 是 Yggdrasil（authlib-injector）体系，和微软登录互不影�
 ## Cloudflare 锁区网关（qlmtest.dpdns.org）
 
 - 域名已托管在 Cloudflare（NS：fred/magali.ns.cloudflare.com），是独立 zone，不是 dpdns.org 的子记录。
-- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.7 Release 资产回源，`PATH_PREFIX=/aurora`。
+- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.8 Release 资产回源，`PATH_PREFIX=/aurora`。
 - 本地已验证：CN 请求 403，其他地区 200 且回源到正确的 Release 资产 URL。
 - **尚未部署**：需要 Cloudflare 凭据。你提供的 32 位 Key 是 Global API Key（需配邮箱、全账号权限，不推荐），建议在 Cloudflare 面板创建 Scoped Token（Workers Scripts:Edit、Zone Workers Routes:Edit、DNS:Edit、Zone:Read，范围限 qlmtest.dpdns.org），然后：
 

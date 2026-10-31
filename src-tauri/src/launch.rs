@@ -11,7 +11,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 use zip::ZipArchive;
@@ -434,7 +434,7 @@ fn existing_version_file(ctx: &LaunchContext, id: &str, name: &str) -> Option<Pa
     None
 }
 
-fn mirror_url(original: &str, version_id: &str) -> Option<String> {
+pub(crate) fn mirror_url(original: &str, version_id: &str) -> Option<String> {
     let url = reqwest::Url::parse(original).ok()?;
     let host = url.host_str()?;
     let path = url.path();
@@ -463,11 +463,21 @@ fn mirror_url(original: &str, version_id: &str) -> Option<String> {
             }
         }
         "libraries.minecraft.net" => Some(format!("https://bmclapi2.bangbang93.com/maven{path}")),
+        // BMCLAPI also mirrors the Forge/NeoForge maven repositories (verified
+        // by redirect to their mirror nodes). NeoForge lives under the
+        // repository's /releases/ prefix, which BMCLAPI drops when proxying.
+        "maven.minecraftforge.net" => {
+            Some(format!("https://bmclapi2.bangbang93.com/maven{path}"))
+        }
+        "maven.neoforged.net" => Some(format!(
+            "https://bmclapi2.bangbang93.com/maven{}",
+            path.trim_start_matches("/releases")
+        )),
         _ => None,
     }
 }
 
-fn candidates(url: &str, source: &str, version_id: &str) -> Vec<String> {
+pub(crate) fn candidates(url: &str, source: &str, version_id: &str) -> Vec<String> {
     let mirror = mirror_url(url, version_id);
     match source {
         "bmclapi" => mirror
@@ -477,6 +487,75 @@ fn candidates(url: &str, source: &str, version_id: &str) -> Vec<String> {
             .map(|mirror| vec![url.to_string(), mirror])
             .unwrap_or_else(|| vec![url.to_string()]),
         _ => vec![url.to_string()],
+    }
+}
+
+/// Probe both download sources and return the effective one for `auto`.
+/// Result is cached for 10 minutes so a launch only pays for one probe.
+pub(crate) async fn resolve_download_source(
+    client: &reqwest::Client,
+    setting: &str,
+) -> String {
+    match setting {
+        "bmclapi" => return "bmclapi".into(),
+        "official" => return "official".into(),
+        _ => {}
+    }
+    static CACHE: std::sync::OnceLock<Mutex<Option<(std::time::Instant, String)>>> =
+        std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    if let Some((at, source)) = cache.lock().ok().and_then(|guard| guard.clone()) {
+        if at.elapsed() < std::time::Duration::from_secs(600) {
+            return source;
+        }
+    }
+    let official_probe = probe_source(
+        client,
+        "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
+    );
+    let mirror_probe = probe_source(
+        client,
+        "https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json",
+    );
+    let (official, mirror) = futures::join!(official_probe, mirror_probe);
+    let source = pick_download_source(official, mirror);
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((std::time::Instant::now(), source.clone()));
+    }
+    source
+}
+
+async fn probe_source(client: &reqwest::Client, url: &str) -> Option<std::time::Duration> {
+    let start = std::time::Instant::now();
+    let response = client
+        .get(url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    Some(start.elapsed())
+}
+
+/// Prefer whichever source answered (and answered faster); fall back to the
+/// official endpoint when both fail.
+fn pick_download_source(
+    official: Option<std::time::Duration>,
+    mirror: Option<std::time::Duration>,
+) -> String {
+    match (official, mirror) {
+        (Some(a), Some(b)) => {
+            if b < a {
+                "bmclapi".into()
+            } else {
+                "official".into()
+            }
+        }
+        (Some(_), None) => "official".into(),
+        (None, Some(_)) => "bmclapi".into(),
+        (None, None) => "official".into(),
     }
 }
 
@@ -761,6 +840,24 @@ pub async fn prepare(
     report: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<Prepared, String> {
     report(&format!("读取版本 {}", ctx.version_id));
+    let bootstrap_client = if ctx.proxy.trim().is_empty() {
+        reqwest::Client::builder()
+            .user_agent("AuroraLauncher/0.3")
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .map_err(|e| e.to_string())?
+    } else {
+        reqwest::Client::builder()
+            .user_agent("AuroraLauncher/0.3")
+            .timeout(std::time::Duration::from_secs(20))
+            .proxy(reqwest::Proxy::all(&ctx.proxy).map_err(|e| e.to_string())?)
+            .build()
+            .map_err(|e| e.to_string())?
+    };
+    let effective_source = resolve_download_source(&bootstrap_client, &ctx.download_source).await;
+    if ctx.download_source == "auto" {
+        report(&format!("自动下载源：{}", effective_source));
+    }
     let version = load_version(ctx, &ctx.version_id, 0)?;
     let required_java = version
         .java_version
@@ -926,7 +1023,7 @@ pub async fn prepare(
     download_all(
         &client,
         downloads,
-        &ctx.download_source,
+        &effective_source,
         &client_jar_id,
         report,
     )
@@ -958,7 +1055,7 @@ pub async fn prepare(
             });
             let _ = name;
         }
-        download_all(&client, items, &ctx.download_source, &client_jar_id, report).await?;
+        download_all(&client, items, &effective_source, &client_jar_id, report).await?;
         if parsed.virtual_ || parsed.map_to_resources {
             let virtual_dir = assets_root.join(if parsed.map_to_resources {
                 "resources"
@@ -1252,6 +1349,31 @@ mod tests {
             replace_placeholders("--username ${auth_player_name} -cp ${classpath}", &map),
             "--username Steve -cp a.jar;b.jar"
         );
+    }
+
+    #[test]
+    fn download_source_pick_prefers_faster_alive_source() {
+        use std::time::Duration;
+        assert_eq!(pick_download_source(Some(Duration::from_millis(50)), Some(Duration::from_millis(20))), "bmclapi");
+        assert_eq!(pick_download_source(Some(Duration::from_millis(20)), Some(Duration::from_millis(50))), "official");
+        assert_eq!(pick_download_source(Some(Duration::from_millis(20)), None), "official");
+        assert_eq!(pick_download_source(None, Some(Duration::from_millis(20))), "bmclapi");
+        assert_eq!(pick_download_source(None, None), "official");
+    }
+
+    #[test]
+    fn forge_and_neoforge_maven_are_mirrored() {
+        let url = "https://maven.minecraftforge.net/net/minecraftforge/forge/1.20.1-47.3.0/forge-1.20.1-47.3.0-installer.jar";
+        assert_eq!(
+            mirror_url(url, "1.20.1").as_deref(),
+            Some("https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/1.20.1-47.3.0/forge-1.20.1-47.3.0-installer.jar")
+        );
+        let url = "https://maven.neoforged.net/releases/net/neoforged/neoforge/20.4.237/neoforge-20.4.237-installer.jar";
+        assert_eq!(
+            mirror_url(url, "20.4.237").as_deref(),
+            Some("https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/20.4.237/neoforge-20.4.237-installer.jar")
+        );
+        assert_eq!(mirror_url("https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.3/fabric-installer-1.0.3.jar", "x"), None);
     }
 
     #[test]

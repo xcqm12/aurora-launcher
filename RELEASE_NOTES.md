@@ -1,4 +1,11 @@
-# Aurora Launcher v0.4.9
+# Aurora Launcher v0.4.10
+
+- 自动下载源探测：auto 模式并发探测 Mojang 官方与 BMCLAPI，选响应更快的一边，缓存 10 分钟；启动与所有安装流程共用。
+- Forge / NeoForge 安装器、版本元数据与 ensure_vanilla（版本清单/JSON/client jar）接入 BMCLAPI 镜像候选，失败回退官方；NeoForge 镜像去掉 /releases 前缀（实测可下载完整安装器）。
+- mirror_url 新增 Forge/NeoForge maven 映射，启动期 library 下载同样受益；Fabric/GitHub/optifine.net/LiteLoader 等未镜像源自动模式直接走官方。
+- 设置页“自动”文案更新为“探测最优下载源”。
+
+# Aurora Launcher v0.4.9（历史）
 
 - 创建实例时即可选择加载器，创建完成自动下载官方安装器并执行；失败可重试。
 - OptiFine 全自动：解析 optifine.net 官网版本列表，按 `adloadx → downloadx` 官方流程下载，内置反射驱动调用 `optifine.Installer.doInstall` 无头安装到所选实例（已实测生成 1.20.1-OptiFine_HD_U_I6）。

@@ -29,9 +29,25 @@ async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
     Ok(response.bytes().await.map_err(|e| e.to_string())?.to_vec())
 }
 
+/// Try each candidate URL in order (mirror first when the source says so).
+pub(crate) async fn fetch_first(client: &reqwest::Client, urls: &[String]) -> Result<Vec<u8>, String> {
+    let mut last = String::new();
+    for url in urls {
+        match fetch(client, url).await {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => last = format!("{url}: {error}"),
+        }
+    }
+    Err(if urls.len() > 1 {
+        format!("所有下载源都失败：{last}")
+    } else {
+        last
+    })
+}
+
 async fn download_to(
     client: &reqwest::Client,
-    url: &str,
+    urls: &[String],
     target: &Path,
     sha1: Option<&str>,
     size: u64,
@@ -46,48 +62,68 @@ async fn download_to(
             }
         }
     }
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("下载失败：{e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("下载返回 HTTP {}", response.status().as_u16()));
-    }
-    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
-    if size > 0 && bytes.len() as u64 != size {
-        return Err("文件大小校验失败".into());
-    }
-    if let Some(expected) = sha1 {
-        if hex::encode(Sha1::digest(&bytes)) != expected.to_lowercase() {
-            return Err("SHA-1 校验失败".into());
+    let mut last = String::new();
+    for url in urls {
+        let response = client.get(url).send().await;
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                last = format!("{url}: {error}");
+                continue;
+            }
+        };
+        if !response.status().is_success() {
+            last = format!("{url}: HTTP {}", response.status().as_u16());
+            continue;
         }
+        let bytes = match response.bytes().await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                last = format!("{url}: {error}");
+                continue;
+            }
+        };
+        if size > 0 && bytes.len() as u64 != size {
+            last = format!("{url}: 文件大小校验失败");
+            continue;
+        }
+        if let Some(expected) = sha1 {
+            if hex::encode(Sha1::digest(&bytes)) != expected.to_lowercase() {
+                last = format!("{url}: SHA-1 校验失败");
+                continue;
+            }
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        write_atomic(target, &bytes)?;
+        return Ok(());
     }
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    write_atomic(target, &bytes)
+    Err(format!("下载失败：{last}"))
 }
 
 async fn ensure_vanilla(
     client: &reqwest::Client,
     game_dir: &Path,
     version: &str,
+    source: &str,
 ) -> Result<(), String> {
     let version_dir = game_dir.join("versions").join(version);
     let json_path = version_dir.join(format!("{version}.json"));
     let jar_path = version_dir.join(format!("{version}.jar"));
     if !json_path.exists() {
-        let manifest: Value = client
-            .get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
-            .send()
-            .await
-            .map_err(|e| format!("获取版本清单失败：{e}"))?
-            .error_for_status()
-            .map_err(|_| "获取版本清单失败".to_string())?
-            .json()
-            .await
-            .map_err(|e| e.to_string())?;
+        let manifest_bytes = fetch_first(
+            client,
+            &crate::launch::candidates(
+                "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
+                source,
+                version,
+            ),
+        )
+        .await
+        .map_err(|e| format!("获取版本清单失败：{e}"))?;
+        let manifest: Value =
+            serde_json::from_slice(&manifest_bytes).map_err(|e| e.to_string())?;
         let url = manifest
             .get("versions")
             .and_then(|value| value.as_array())
@@ -97,7 +133,11 @@ async fn ensure_vanilla(
             .and_then(|item| item.get("url"))
             .and_then(|value| value.as_str())
             .ok_or_else(|| format!("Mojang 清单中找不到版本 {version}"))?;
-        let bytes = fetch(client, url).await?;
+        let bytes = fetch_first(
+            client,
+            &crate::launch::candidates(url, source, version),
+        )
+        .await?;
         fs::create_dir_all(&version_dir).map_err(|e| e.to_string())?;
         write_atomic(&json_path, &bytes)?;
     }
@@ -117,7 +157,14 @@ async fn ensure_vanilla(
             .get("size")
             .and_then(|value| value.as_u64())
             .unwrap_or(0);
-        download_to(client, url, &jar_path, sha1, size).await?;
+        download_to(
+            client,
+            &crate::launch::candidates(url, source, version),
+            &jar_path,
+            sha1,
+            size,
+        )
+        .await?;
     }
     let profiles = game_dir.join("launcher_profiles.json");
     if !profiles.exists() {
@@ -305,7 +352,9 @@ pub async fn install(
     let game_dir = PathBuf::from(&instance.directory).join("game");
     let minecraft = instance.minecraft_version.clone();
     let client = http_client(&app)?;
-    ensure_vanilla(&client, &game_dir, &minecraft).await?;
+    let source = crate::launch::resolve_download_source(&client, &crate::read_settings(&app).download_source)
+        .await;
+    ensure_vanilla(&client, &game_dir, &minecraft, &source).await?;
     let url = installer_url(&client, &loader, &minecraft, &version).await?;
     if !allowed_installer_url(&url) {
         return Err("安装器来源不在官方白名单内".into());
@@ -323,7 +372,8 @@ pub async fn install(
     let installer = PathBuf::from(&instance.directory)
         .join("downloads")
         .join(file_name);
-    download_to(&client, &url, &installer, None, 0).await?;
+    let installer_urls = crate::launch::candidates(&url, &source, &minecraft);
+    download_to(&client, &installer_urls, &installer, None, 0).await?;
 
     let java = crate::launch::find_java(instance.java_path.as_deref(), 8)?;
     let mut command = Command::new(&java);
@@ -420,7 +470,8 @@ async fn install_optifine(
     let game_dir = PathBuf::from(&instance.directory).join("game");
     let minecraft = instance.minecraft_version.clone();
     let client = http_client(&app)?;
-    ensure_vanilla(&client, &game_dir, &minecraft).await?;
+    let source = crate::launch::resolve_download_source(&client, &crate::read_settings(&app).download_source).await;
+    ensure_vanilla(&client, &game_dir, &minecraft, &source).await?;
 
     let name = if version.trim().is_empty() {
         let html = client
@@ -574,7 +625,8 @@ async fn install_liteloader(
     let game_dir = PathBuf::from(&instance.directory).join("game");
     let minecraft = instance.minecraft_version.clone();
     let client = http_client(&app)?;
-    ensure_vanilla(&client, &game_dir, &minecraft).await?;
+    let source = crate::launch::resolve_download_source(&client, &crate::read_settings(&app).download_source).await;
+    ensure_vanilla(&client, &game_dir, &minecraft, &source).await?;
 
     let meta: Value = client
         .get(LITELOADER_META)

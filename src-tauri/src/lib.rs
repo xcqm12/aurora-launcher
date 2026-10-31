@@ -2071,6 +2071,9 @@ async fn loader_versions(
     game_version: String,
 ) -> Result<LoaderCatalog, String> {
     let client = http_client(&app)?;
+    let source =
+        crate::launch::resolve_download_source(&client, &read_settings(&app).download_source)
+            .await;
     let (name, page) = loader_label(&id);
     let mut versions = Vec::new();
     let mut installer_url = None;
@@ -2139,19 +2142,37 @@ async fn loader_versions(
             note = "自动下载官方安装器并执行，安装到本实例。".into();
         }
         "forge" => {
-            let response = client
-                .get("https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml")
-                .send()
-                .await
-                .map_err(|e| format!("Forge 版本请求失败：{e}"))?;
-            if response.status().is_success() {
+            let response = match crate::launch::candidates(
+                "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml",
+                &source,
+                &game_version,
+            )
+            .as_slice()
+            {
+                [only] => client.get(only).send().await.ok(),
+                urls => {
+                    let mut fetched = None;
+                    for url in urls {
+                        if let Ok(response) = client.get(url).send().await {
+                            if response.status().is_success() {
+                                fetched = Some(response);
+                                break;
+                            }
+                        }
+                    }
+                    fetched
+                }
+            };
+            if let Some(response) = response {
+                if response.status().is_success() {
                 let text = response.text().await.map_err(|e| e.to_string())?;
-                let prefix = format!("{game_version}-");
-                versions = xml_versions(&text)
-                    .into_iter()
-                    .filter(|version| version.starts_with(&prefix))
-                    .map(|version| version[prefix.len()..].to_string())
-                    .collect();
+                    let prefix = format!("{game_version}-");
+                    versions = xml_versions(&text)
+                        .into_iter()
+                        .filter(|version| version.starts_with(&prefix))
+                        .map(|version| version[prefix.len()..].to_string())
+                        .collect();
+                }
             }
             if versions.is_empty() {
                 if let Ok(response) = client
@@ -2182,15 +2203,17 @@ async fn loader_versions(
             note = "自动下载官方安装器并执行，安装到本实例。".into();
         }
         "neoforge" => {
-            let response = client
-                .get("https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml")
-                .send()
-                .await
-                .map_err(|e| format!("NeoForge 版本请求失败：{e}"))?;
-            if !response.status().is_success() {
-                return Err(format!("NeoForge 返回 HTTP {}", response.status().as_u16()));
-            }
-            let text = response.text().await.map_err(|e| e.to_string())?;
+            let bytes = loaders::fetch_first(
+                &client,
+                &crate::launch::candidates(
+                    "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml",
+                    &source,
+                    &game_version,
+                ),
+            )
+            .await
+            .map_err(|e| format!("NeoForge 版本请求失败：{e}"))?;
+            let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
             versions = xml_versions(&text);
             if let Some(prefix) = neoforge_prefix(&game_version) {
                 versions.retain(|version| version.starts_with(prefix));

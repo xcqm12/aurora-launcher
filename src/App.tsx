@@ -2605,7 +2605,7 @@ function SettingsPage({
           <select value={downloadSource} onChange={(event) => setDownloadSource(event.target.value)}>
             <option value="official">Mojang 官方</option>
             <option value="bmclapi">BMCLAPI 国内镜像</option>
-            <option value="auto">自动（官方优先，失败回退镜像）</option>
+            <option value="auto">自动（探测最优下载源）</option>
           </select>
         </label>
         <label className="field-label">

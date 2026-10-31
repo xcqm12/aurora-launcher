@@ -1,6 +1,14 @@
 # Aurora Launcher
 
-Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录；0.4.5 增加 LittleSkin OAuth 授权登录并消除子进程控制台窗口；0.4.6 补上 LittleSkin 应用管理与白名单申请入口；0.4.7 让 OAuth 登录支持刷新令牌续期；0.4.8 内置已过审的微软 Client ID，开箱可正版登录；0.4.9 下载 MC 本体时即可选择加载器并自动安装（OptiFine / LiteLoader 也自动化）。
+Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录；0.4.5 增加 LittleSkin OAuth 授权登录并消除子进程控制台窗口；0.4.6 补上 LittleSkin 应用管理与白名单申请入口；0.4.7 让 OAuth 登录支持刷新令牌续期；0.4.8 内置已过审的微软 Client ID，开箱可正版登录；0.4.9 下载 MC 本体时即可选择加载器并自动安装（OptiFine / LiteLoader 也自动化）；0.4.10 下载源支持官方/镜像/自动探测最优，加载器安装全面走镜像。
+
+## 0.4.10 更新内容
+
+- **自动下载源探测**：`auto` 不再是固定的“官方优先、失败回退”——启动与安装前并发探测 Mojang 官方和 BMCLAPI 的版本清单，取响应更快且可达的一边，结果缓存 10 分钟。实测：本机（代理直连海外）自动选中官方（0.7s vs 6.0s）；境内网络会自动选中 BMCLAPI。
+- **加载器安装接入镜像**：Forge / NeoForge 安装器与版本元数据、`ensure_vanilla`（版本清单 / 版本 JSON / client jar）全部支持 BMCLAPI 镜像候选，失败自动回退官方。BMCLAPI 对 NeoForge 的镜像会去掉 `/releases` 前缀（已实测可下载完整安装器，6.4MB）。
+- `mirror_url` 新增 `maven.minecraftforge.net` 与 `maven.neoforged.net` 映射，启动期 library 下载同样受益。
+- 不参与镜像的源（Fabric maven、GitHub、optifine.net、LiteLoader maven）自动模式下直接走官方，行为在 README 说明。
+- 设置页“自动”选项文案更新为“探测最优下载源”。
 
 ## 0.4.9 更新内容
 
@@ -122,7 +130,10 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成
 
 ## 镜像与代理
 
-- 下载源：`official`、`bmclapi`、`auto`。BMCLAPI 使用 `bmclapi2.bangbang93.com`，映射 `/assets`、`/maven`、`/version/{id}/client` 等路径；短窗口约 10 次请求限制，故并发降为 2。
+- 下载源：`official`（Mojang/官方源）、`bmclapi`（BMCLAPI 国内镜像）、`auto`（默认建议：同时探测两个源，取响应更快者，结果缓存 10 分钟；实测在境内会自动选中 BMCLAPI，海外直连环境自动选中官方）。
+- MC 本体（版本清单/JSON/client jar/libraries/assets）与 Forge、NeoForge 安装器及其 maven 依赖均支持镜像：BMCLAPI 映射 `/assets`、`/maven`、`/version/{id}/client`，Forge/NeoForge 的 maven 请求会去掉 NeoForge 的 `/releases` 前缀（已实测镜像可下载完整安装器）。
+- 不参与镜像（官方源本就可达或 BMCLAPI 未提供）：Fabric/Legacy Fabric 的 maven、Cleanroom 的 GitHub Releases、OptiFine 的 optifine.net（BMCLAPI 的 OptiFine 接口只提供列表不提供文件）、LiteLoader 的官方 maven。这些源自动模式下直接走官方。
+- BMCLAPI 短窗口约 10 次请求限制，游戏文件并发降为 2。
 - 代理可选，留空直连；设置中的代理会用于所有 API、资源与游戏文件下载。
 
 ## 签名
@@ -200,7 +211,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.9>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.10>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）
 
@@ -295,7 +306,7 @@ LittleSkin 是 Yggdrasil（authlib-injector）体系，和微软登录互不影�
 ## Cloudflare 锁区网关（qlmtest.dpdns.org）
 
 - 域名已托管在 Cloudflare（NS：fred/magali.ns.cloudflare.com），是独立 zone，不是 dpdns.org 的子记录。
-- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.9 Release 资产回源，`PATH_PREFIX=/aurora`。
+- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.10 Release 资产回源，`PATH_PREFIX=/aurora`。
 - 本地已验证：CN 请求 403，其他地区 200 且回源到正确的 Release 资产 URL。
 - **尚未部署**：需要 Cloudflare 凭据。你提供的 32 位 Key 是 Global API Key（需配邮箱、全账号权限，不推荐），建议在 Cloudflare 面板创建 Scoped Token（Workers Scripts:Edit、Zone Workers Routes:Edit、DNS:Edit、Zone:Read，范围限 qlmtest.dpdns.org），然后：
 

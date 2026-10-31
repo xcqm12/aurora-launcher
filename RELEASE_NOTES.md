@@ -1,4 +1,12 @@
-# Aurora Launcher v0.4.8
+# Aurora Launcher v0.4.9
+
+- 创建实例时即可选择加载器，创建完成自动下载官方安装器并执行；失败可重试。
+- OptiFine 全自动：解析 optifine.net 官网版本列表，按 `adloadx → downloadx` 官方流程下载，内置反射驱动调用 `optifine.Installer.doInstall` 无头安装到所选实例（已实测生成 1.20.1-OptiFine_HD_U_I6）。
+- LiteLoader 按官方元数据直装（≤1.12.2）：versions.json + maven-metadata 解析快照，预下载 launchwrapper/asm/mixin，按官方安装器产物构造 launchwrapper 版本 JSON；官方 md5 已过期，按内容校验放行并记录日志。
+- LabyMod 4 为独立启动器且官网反爬：创建后自动打开官方下载页，提示选择实例 game 目录。
+- 已知边界：LiteLoader 自动安装未经真实进游戏验证（本机无 Java 8）。
+
+# Aurora Launcher v0.4.8（历史）
 
 - **内置 Aurora 自有 Azure 应用的 Client ID**（ae897ba3-93b3-4998-a4fb-b80bad87b538）。该应用于 2026-10-31 通过 Mojang appID 白名单审核（Mojang Enforcement 邮件确认），微软正版登录开箱即用，不再要求先注册 Azure。
 - 设置页 Client ID 留空即用内置 ID；“验证”按钮在留空时检测内置 ID；设置页、环境变量、构建注入三种覆盖方式不变。

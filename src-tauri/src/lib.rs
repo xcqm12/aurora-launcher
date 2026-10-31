@@ -2136,7 +2136,7 @@ async fn loader_versions(
                         });
                 }
             }
-            note = "可下载官方安装器到实例 downloads；自动执行安装器将在后续接入。".into();
+            note = "自动下载官方安装器并执行，安装到本实例。".into();
         }
         "forge" => {
             let response = client
@@ -2179,7 +2179,7 @@ async fn loader_versions(
             versions.reverse();
             versions.truncate(40);
             installer_template = Some("https://maven.minecraftforge.net/net/minecraftforge/forge/{mc}-{version}/forge-{mc}-{version}-installer.jar".into());
-            note = "Forge 安装器需要 Java 运行；首版仅下载安装器。".into();
+            note = "自动下载官方安装器并执行，安装到本实例。".into();
         }
         "neoforge" => {
             let response = client
@@ -2198,17 +2198,32 @@ async fn loader_versions(
             versions.reverse();
             versions.truncate(40);
             installer_template = Some("https://maven.neoforged.net/releases/net/neoforged/neoforge/{version}/neoforge-{version}-installer.jar".into());
-            note = "NeoForge 版本按 Minecraft 版本前缀筛选；首版仅下载安装器。".into();
+            note = "版本按 Minecraft 版本前缀筛选；自动下载官方安装器并执行。".into();
+        }
+        "optifine" => {
+            let response = client
+                .get("https://optifine.net/downloads")
+                .header(
+                    "User-Agent",
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AuroraLauncher",
+                )
+                .send()
+                .await;
+            if let Ok(response) = response {
+                if let Ok(html) = response.text().await {
+                    versions = loaders::optifine_versions_for_page(&html, &game_version);
+                }
+            }
+            note = "从 optifine.net 官网下载安装器并无头安装到本实例；版本列表来自官网。".into();
+        }
+        "liteloader" => {
+            note = "按官方元数据（dl.liteloader.com）直接安装到本实例，无需选择版本；仅支持 1.12.2 及更早的 Minecraft。".into();
+        }
+        "labymod" => {
+            note = "LabyMod 4 是独立启动器且官网有反爬保护，无法静默安装；创建实例后将打开官方下载页，请在安装器中选择本实例的 game 目录。".into();
         }
         _ => {
-            note = match id.as_str() {
-                "optifine" => "OptiFine 无稳定公开 API，请从官网下载后手动导入。",
-                "cleanroom" => "请从 GitHub Releases 下载；首版不自动安装。",
-                "labymod" => "请使用 LabyMod 官方安装器；首版不自动执行。",
-                "liteloader" => "LiteLoader 已停止更新，仅支持手动导入。",
-                _ => "请从官方页面下载。",
-            }
-            .into();
+            note = "请从官方页面下载。".into();
         }
     }
     Ok(LoaderCatalog {

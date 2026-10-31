@@ -2707,7 +2707,7 @@ function CreateInstance({
     () => (manifest?.versions ?? []).filter((item) => item.kind === "release").slice(0, 120),
     [manifest],
   );
-  const staticLoader = ["optifine", "cleanroom", "labymod", "liteloader"].includes(loader);
+  const staticLoader = ["labymod"].includes(loader);
 
   useEffect(() => {
     let cancelled = false;
@@ -2735,6 +2735,31 @@ function CreateInstance({
         loaderVersion: loaderVersion.trim() || undefined,
       });
       await onCreated(instance);
+      if (loader === "labymod") {
+        void api
+          .openExternal("https://www.labymod.net/en/download")
+          .catch(() => undefined);
+        onNotice(
+          "实例已创建。LabyMod 4 是独立启动器，已打开官方下载页；安装时选择本实例的 game 目录。",
+        );
+        return;
+      }
+      if (loader !== "vanilla") {
+        onNotice(`正在下载并安装 ${version} 的 ${loader}，请稍候…`);
+        try {
+          const result = await api.installLoader(
+            instance.id,
+            loader,
+            loaderVersion.trim(),
+          );
+          await onCreated(instance);
+          onNotice(`已安装 ${loader} ${loaderVersion.trim() || ""}，版本 ${result.version_id}`);
+        } catch (installError) {
+          onNotice(
+            `实例已创建，但加载器安装失败：${String(installError)}。可在实例管理中重试。`,
+          );
+        }
+      }
     } catch (error) {
       onNotice(String(error));
     } finally {
@@ -2789,7 +2814,7 @@ function CreateInstance({
                 <input
                   value={loaderVersion}
                   onChange={(event) => setLoaderVersion(event.target.value)}
-                  placeholder="可留空，稍后手动导入"
+                  placeholder="可留空，自动安装最新适配版"
                 />
               ) : (
                 <select

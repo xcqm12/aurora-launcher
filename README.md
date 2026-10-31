@@ -1,6 +1,14 @@
 # Aurora Launcher
 
-Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录；0.4.5 增加 LittleSkin OAuth 授权登录并消除子进程控制台窗口；0.4.6 补上 LittleSkin 应用管理与白名单申请入口；0.4.7 让 OAuth 登录支持刷新令牌续期；0.4.8 内置已过审的微软 Client ID，开箱可正版登录。
+Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录；0.4.5 增加 LittleSkin OAuth 授权登录并消除子进程控制台窗口；0.4.6 补上 LittleSkin 应用管理与白名单申请入口；0.4.7 让 OAuth 登录支持刷新令牌续期；0.4.8 内置已过审的微软 Client ID，开箱可正版登录；0.4.9 下载 MC 本体时即可选择加载器并自动安装（OptiFine / LiteLoader 也自动化）。
+
+## 0.4.9 更新内容
+
+- **创建实例即装加载器**：新建实例选择加载器后，创建完成自动下载官方安装器并执行，无需再到实例管理里手动装一次；失败时实例保留、可重试。
+- **OptiFine 全自动安装**：从 optifine.net 官网解析版本列表（实测解析出 225 个构建），按官方 `adloadx → downloadx` 流程下载安装器并校验为有效 JAR；官方安装器只有图形界面，内置约 20 行反射驱动（源码与 .class 一并提交）调用 `optifine.Installer.doInstall(目录)`，无头安装到所选实例，已实测生成 `1.20.1-OptiFine_HD_U_I6` 并更新 launcher_profiles.json。
+- **LiteLoader 官方元数据直装**：读取 dl.liteloader.com 的官方 versions.json，按 maven-metadata 解析时间戳快照，从 repo.mumfrey.com 下载核心 JAR（校验包含 LiteLoaderTweaker），预下载 launchwrapper/asm/mixin 依赖（快照解析为官方时间戳文件名），并按官方安装器产物构造 launchwrapper 版本 JSON。官方元数据的 md5 已过期对不上，改为“有效 JAR + 包含 Tweaker”放行并在日志说明。仅支持 1.12.2 及更早版本；本机无 Java 8，未做完整进游戏验证。
+- **LabyMod**：4.x 是独立启动器且官网有反爬保护，创建实例后自动打开官方下载页，提示把安装目标指向实例 game 目录。
+- 创建对话框与实例管理的加载器说明文案同步更新；`loader_versions` 现在返回 OptiFine 官网版本列表。
 
 ## 0.4.8 更新内容
 
@@ -90,7 +98,7 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成
 ## 尚未实现 / 限制
 
 - **微软登录已内置自有 Client ID（ae897ba3-93b3-4998-a4fb-b80bad87b538，已过 Mojang appID 白名单）**，开箱可用；想用自己的应用时在设置页覆盖。
-- OptiFine、LabyMod、LiteLoader 没有稳定无头安装接口，继续手动导入；不伪装自动安装。
+- OptiFine 已自动安装（官网下载 + 反射驱动无头安装）；LiteLoader 按官方元数据直装（≤1.12.2）；LabyMod 4 是独立启动器，打开官方下载页安装。
 - 服务端锁区只交付 Worker 模板，未部署；GitHub Release 资产仍公开，真正强制需要把资产放到 Worker 后面的源站。
 - 本机签名使用自签名证书，只在本机信任；公开信任需要 CA 证书或云签名服务。
 - CurseForge 导入/搜索需要 `console.curseforge.com` 的有效 API Key；网站 PAT 会 403。
@@ -185,13 +193,14 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 9. 本机 PATH 默认 Java 27 不适合 MC：启动器按版本要求选择 Java 17/21，可在实例中指定。
 10. Fabric 自动安装验证：生成 `fabric-loader-0.16.0-1.20.1` 并成功启动。
 11. BMCLAPI 是重定向/签名层且 JSON 内仍是 Mojang URL：必须由客户端映射主机，不能缓存签名 URL。
-12. OptiFine 下载依赖广告页 token、LabyMod 对非浏览器返回 403、LiteLoader 已停更：不做自动安装。
+12. OptiFine 下载依赖广告页 token（已带 UA/Referer 解析 `adloadx → downloadx`，token 过期会重试失败提示）、LabyMod 官网反爬无法直下（改为打开下载页）、LiteLoader 已停更且官方 md5 过期（按内容校验放行并记录日志）。
 13. 微软不存在可合法复用的第三方公共 Client ID：Aurora 现已内置自有 Azure 应用（2026-10-31 过 Mojang 审核），第三方启动器仍需自行注册。
+14. LiteLoader 自动安装未经真实进游戏验证：本机没有 Java 8（LiteLoader 仅支持 ≤1.12.2），下载、依赖解析与版本 JSON 构造均已按官方安装器产物校验。
 
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.8>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.9>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）
 
@@ -286,7 +295,7 @@ LittleSkin 是 Yggdrasil（authlib-injector）体系，和微软登录互不影�
 ## Cloudflare 锁区网关（qlmtest.dpdns.org）
 
 - 域名已托管在 Cloudflare（NS：fred/magali.ns.cloudflare.com），是独立 zone，不是 dpdns.org 的子记录。
-- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.8 Release 资产回源，`PATH_PREFIX=/aurora`。
+- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.9 Release 资产回源，`PATH_PREFIX=/aurora`。
 - 本地已验证：CN 请求 403，其他地区 200 且回源到正确的 Release 资产 URL。
 - **尚未部署**：需要 Cloudflare 凭据。你提供的 32 位 Key 是 Global API Key（需配邮箱、全账号权限，不推荐），建议在 Cloudflare 面板创建 Scoped Token（Workers Scripts:Edit、Zone Workers Routes:Edit、DNS:Edit、Zone:Read，范围限 qlmtest.dpdns.org），然后：
 

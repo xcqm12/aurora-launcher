@@ -66,6 +66,10 @@ pub(crate) struct AppSettings {
     pub(crate) active_account: String,
     #[serde(default)]
     pub(crate) mp_peers: String,
+    #[serde(default)]
+    pub(crate) instances_dir: String,
+    #[serde(default)]
+    pub(crate) sakura_source: String,
 }
 
 impl Default for AppSettings {
@@ -77,6 +81,8 @@ impl Default for AppSettings {
             download_source: "official".into(),
             ms_client_id: String::new(),
             mp_peers: String::new(),
+            instances_dir: String::new(),
+            sakura_source: String::new(),
             active_account: String::new(),
         }
     }
@@ -533,7 +539,14 @@ fn create_instance(
         return Err("不支持的加载器类型".into());
     }
     let id = format!("{}-{}", safe_id(&name.to_lowercase()), chrono_like_stamp());
-    let root = data_dir(&app)?.join("instances").join(&id);
+    let configured = read_settings(&app).instances_dir;
+    let base = if configured.trim().is_empty() {
+        data_dir(&app)?.join("instances")
+    } else {
+        PathBuf::from(configured.trim())
+    };
+    fs::create_dir_all(&base).map_err(|e| format!("实例存储目录不可用（{}）：{e}", base.display()))?;
+    let root = base.join(&id);
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     for dir in [
         "mods",
@@ -1427,6 +1440,8 @@ fn save_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), Str
             ms_client_id: settings.ms_client_id.trim().to_string(),
             active_account: settings.active_account,
             mp_peers: settings.mp_peers.trim().to_string(),
+            instances_dir: settings.instances_dir.trim().to_string(),
+            sakura_source: settings.sakura_source.trim().to_string(),
         },
     )
 }
@@ -1503,22 +1518,31 @@ async fn fetch_sakura_background(
             }
         }
     }
+    // 默认随机图接口（dmoe.cc）；设置页可替换为自己的来源。
+    // 随机图接口不受本项目控制：返回内容无法预览，请求也会把本机 IP
+    // 暴露给该第三方服务，因此设置页提供风险提示并允许随时关闭。
+    let configured = read_settings(&app).sakura_source;
+    let source = if configured.trim().is_empty() {
+        "https://www.dmoe.cc/random.php".to_string()
+    } else {
+        configured.trim().to_string()
+    };
+    let parsed = reqwest::Url::parse(&source)
+        .map_err(|_| "樱花图来源地址无效，请在设置中检查".to_string())?;
+    if parsed.scheme() != "https" || parsed.host_str().unwrap_or_default().is_empty() {
+        return Err("樱花图来源必须使用 https".into());
+    }
     let client = http_client(&app)?;
     let response = client
-        .get("https://www.dmoe.cc/random.php")
+        .get(parsed)
         .send()
         .await
-        .map_err(|_| "樱花背景请求失败".to_string())?;
+        .map_err(|e| format!("樱花背景请求失败：{e}"))?;
     if !response.status().is_success() {
         return Err(format!("樱花背景返回 HTTP {}", response.status().as_u16()));
     }
-    let host_ok = response
-        .url()
-        .host_str()
-        .map(|host| host == "dmoe.cc" || host.ends_with(".dmoe.cc"))
-        .unwrap_or(false);
-    if !host_ok {
-        return Err("樱花背景来源不是受信任域名".into());
+    if response.url().host_str().unwrap_or_default().is_empty() {
+        return Err("樱花背景来源无效".into());
     }
     let content_type = response
         .headers()
@@ -1531,6 +1555,8 @@ async fn fetch_sakura_background(
         .trim()
         .to_lowercase();
     if !allowed_image_type(&content_type) {
+        let _ = fs::remove_file(&cache_path);
+        let _ = fs::remove_file(&meta_path);
         return Err("樱花背景不是支持的图片格式".into());
     }
     let bytes = response
@@ -1538,6 +1564,8 @@ async fn fetch_sakura_background(
         .await
         .map_err(|_| "读取樱花背景失败".to_string())?;
     if bytes.len() > 8 * 1024 * 1024 {
+        let _ = fs::remove_file(&cache_path);
+        let _ = fs::remove_file(&meta_path);
         return Err("樱花背景超过 8 MiB 上限".into());
     }
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

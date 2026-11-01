@@ -2,6 +2,13 @@
 
 Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游戏启动与加载器自动安装、微软正版/LittleSkin/离线登录、整合包导入导出、镜像加速、EasyTier 联机。历史版本更新记录见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
+## 0.5.3 更新内容
+
+- **实例存储目录可选**：设置 → 下载与目录 → “实例存储目录”，可浏览选择磁盘与目录；留空仍使用默认（C 盘 AppData）。仅对新创建的实例生效，已有实例路径不变；联机节点、共享目录设置不受影响。
+- **樱花主题安全化**：随机图接口可在设置中替换（留空使用默认 dmoe.cc，也可换成自建/可信接口，必须 https）；设置页保留风险提示——接口返回的图片不受控制、请求会把 IP 暴露给第三方；背景在原有模糊基础上叠加更深的渐变遮罩。
+- **失败自动回退**：樱花背景加载失败时清除背景并自动回退默认主题，提示具体原因；后端在图片格式/大小校验失败时同步清理缓存，避免下次启动重复使用坏缓存。
+- 加载器安装进度条与 README 精简延续 0.5.2（见 RELEASE_NOTES.md 历史）。
+
 ## 0.5.2 更新内容
 
 - **加载器安装全程进度条**：下载安装器（Forge/NeoForge 约 6MB）、下载 MC 本体（实例首次安装时的原版 jar）、OptiFine 官网下载、EasyTier 下载（约 30MB）全部流式上报，每 256 KiB 刷新一次；运行安装器与预下载缺失库显示阶段进度（第 n 次/共 3 次、第 i/n 个库）。
@@ -135,7 +142,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.5.2>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.5.3>
 - 分发下载页：<http://mcdles.us.ci/>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）
@@ -231,7 +238,7 @@ LittleSkin 是 Yggdrasil（authlib-injector）体系，和微软登录互不影�
 ## Cloudflare 锁区网关（qlmtest.dpdns.org）
 
 - 域名已托管在 Cloudflare（NS：fred/magali.ns.cloudflare.com），是独立 zone，不是 dpdns.org 的子记录。
-- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.5.2 Release 资产回源，`PATH_PREFIX=/aurora`。
+- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.5.3 Release 资产回源，`PATH_PREFIX=/aurora`。
 - 本地已验证：CN 请求 403，其他地区 200 且回源到正确的 Release 资产 URL。
 - **尚未部署**：需要 Cloudflare 凭据。你提供的 32 位 Key 是 Global API Key（需配邮箱、全账号权限，不推荐），建议在 Cloudflare 面板创建 Scoped Token（Workers Scripts:Edit、Zone Workers Routes:Edit、DNS:Edit、Zone:Read，范围限 qlmtest.dpdns.org），然后：
 

@@ -102,6 +102,8 @@ export type AppSettings = {
   ms_client_id: string;
   active_account: string;
   mp_peers?: string;
+  instances_dir?: string;
+  sakura_source?: string;
 };
 export type ProxyTest = { ok: boolean; status: number; latency_ms: number; message: string };
 export type SakuraBackground = { data_url: string; cached: boolean };

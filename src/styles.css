@@ -89,6 +89,19 @@ button:disabled {
   transform: scale(1.06);
 }
 
+.sakura-shade {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(8, 11, 20, 0.42) 0%,
+    rgba(8, 11, 20, 0.6) 46%,
+    rgba(8, 11, 20, 0.78) 100%
+  );
+  pointer-events: none;
+}
+
 .with-sakura .filter-panel,
 .with-sakura .resource-row,
 .with-sakura .detail-drawer,

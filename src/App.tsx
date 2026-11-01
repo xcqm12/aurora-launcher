@@ -286,11 +286,14 @@ function App() {
   return (
     <div className={`app-shell ${sakura ? "with-sakura" : ""}`}>
       {sakura && (
-        <div
-          className="sakura-layer"
-          style={{ backgroundImage: `url(${sakura})` }}
-          aria-hidden="true"
-        />
+        <>
+          <div
+            className="sakura-layer"
+            style={{ backgroundImage: `url(${sakura})` }}
+            aria-hidden="true"
+          />
+          <div className="sakura-shade" aria-hidden="true" />
+        </>
       )}
       <aside className="sidebar">
         <div className="brand">
@@ -2107,6 +2110,8 @@ function SettingsPage({
   const [downloadSource, setDownloadSource] = useState(settings.download_source || "official");
   const [mpPeers, setMpPeers] = useState(settings.mp_peers || "");
   const [msClientId, setMsClientId] = useState(settings.ms_client_id);
+  const [instancesDir, setInstancesDir] = useState(settings.instances_dir || "");
+  const [sakuraSource, setSakuraSource] = useState(settings.sakura_source || "");
   const [accounts, setAccounts] = useState<AccountView[]>([]);
   const [offlineName, setOfflineName] = useState("");
   const [deviceCode, setDeviceCode] = useState<DeviceCode | null>(null);
@@ -2141,6 +2146,8 @@ function SettingsPage({
     setSharedGameDir(settings.shared_game_dir);
     setDownloadSource(settings.download_source || "official");
     setMpPeers(settings.mp_peers || "");
+    setInstancesDir(settings.instances_dir || "");
+    setSakuraSource(settings.sakura_source || "");
     setMsClientId(settings.ms_client_id);
   }, [settings]);
 
@@ -2196,8 +2203,10 @@ function SettingsPage({
       download_source: downloadSource,
       shared_game_dir: sharedGameDir.trim(),
       mp_peers: mpPeers.trim(),
+      instances_dir: instancesDir.trim(),
+      sakura_source: sakuraSource.trim(),
     });
-    onNotice("下载与共享目录设置已保存");
+    onNotice("下载与目录设置已保存");
   };
 
   const chooseSharedDir = async () => {
@@ -2799,6 +2808,26 @@ function SettingsPage({
           />
         </label>
         <label className="field-label">
+          实例存储目录（可选；留空使用默认 C 盘 AppData，仅对新实例生效）
+          <div className="inline-field">
+            <input
+              value={instancesDir}
+              onChange={(event) => setInstancesDir(event.target.value)}
+              placeholder="例如 D:\AuroraInstances"
+              spellCheck={false}
+            />
+            <button
+              className="ghost-button"
+              onClick={async () => {
+                const path = await api.pickFolder();
+                if (path) setInstancesDir(path);
+              }}
+            >
+              浏览
+            </button>
+          </div>
+        </label>
+        <label className="field-label">
           共享游戏目录（可选）
           <div className="inline-field">
             <input
@@ -2827,7 +2856,7 @@ function SettingsPage({
           </div>
           <div>
             <h3>樱花二次元主题</h3>
-            <p>从 dmoe.cc 随机图片接口获取背景；默认关闭。</p>
+            <p>随机二次元背景；默认关闭。背景会加模糊与深色遮罩，加载失败自动回退默认主题。</p>
           </div>
         </div>
         <div className="toggle-row">
@@ -2845,8 +2874,17 @@ function SettingsPage({
             </button>
           )}
         </div>
+        <label className="field-label">
+          随机图接口（可选；留空使用默认 https://www.dmoe.cc/random.php，也可换成你信任的图片接口）
+          <input
+            value={sakuraSource}
+            onChange={(event) => setSakuraSource(event.target.value)}
+            placeholder="https://www.dmoe.cc/random.php"
+            spellCheck={false}
+          />
+        </label>
         <p className="security-note">
-          该接口返回不受控的随机图片，可能包含不适宜内容；请求会将你的 IP 暴露给第三方。背景会加模糊与深色遮罩，加载失败时自动回退默认主题。
+          随机图接口不受本项目控制：返回的图片无法预先审核，可能包含不适宜内容；请求也会把你的 IP 暴露给该第三方服务。界面已用模糊与深色遮罩弱化背景，加载失败时自动回退默认主题；介意这些风险请保持关闭或换成自建接口。
         </p>
         {sakura && (
           <div className="sakura-preview">

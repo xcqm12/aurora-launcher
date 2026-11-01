@@ -1,4 +1,11 @@
-# Aurora Launcher v0.4.10
+# Aurora Launcher v0.5.0
+
+- 模组/材质/光影/整合包文件下载改为流式并显示实时进度（百分比 + 已下载/总大小），Modrinth 与 CurseForge 均支持。
+- 新增联机功能（EasyTier，对齐 PCL-CE 方案）：创建/加入房间、房间码 `网络名#密钥`、虚拟 IP 展示与联机日志；主机固定 10.144.144.1，客人 DHCP 自动取址（已实测分配 10.144.144.2/24）。
+- EasyTier 首次使用自动从 GitHub Releases 下载并解包；共享节点可在设置页自定义（官方公共节点 2026-11 已下线，跨网联机需要自建/社区节点）。
+- TUN 虚拟网卡需要管理员权限运行启动器。
+
+# Aurora Launcher v0.4.10（历史）
 
 - 自动下载源探测：auto 模式并发探测 Mojang 官方与 BMCLAPI，选响应更快的一边，缓存 10 分钟；启动与所有安装流程共用。
 - Forge / NeoForge 安装器、版本元数据与 ensure_vanilla（版本清单/JSON/client jar）接入 BMCLAPI 镜像候选，失败回退官方；NeoForge 镜像去掉 /releases 前缀（实测可下载完整安装器）。

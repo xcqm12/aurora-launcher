@@ -46,6 +46,8 @@ import {
   VersionManifest,
   YggdrasilProfile,
   LittleSkinOauthDevice,
+  ResourceProgressPayload,
+  MpStatus,
 } from "./api";
 
 type View = "home" | "browse" | "instances" | "loaders" | "settings";
@@ -1060,6 +1062,19 @@ function FilePanel({
   const [loading, setLoading] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [progress, setProgress] = useState<Record<string, ResourceProgressPayload>>({});
+
+  useEffect(() => {
+    const unlisten = listen<ResourceProgressPayload>("resource-progress", (event) => {
+      setProgress((previous) => ({
+        ...previous,
+        [event.payload.filename]: event.payload,
+      }));
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
   const instance = instances.find((value) => value.id === instanceId);
   const manualOnly = item.kind === "modpack" || item.kind === "world";
 
@@ -1233,11 +1248,29 @@ function FilePanel({
             {!loading && visible.length === 0 && instance && (
               <div className="inline-note">没有与该实例匹配的文件。检查实例版本或加载器。</div>
             )}
-            {visible.map((entry) => (
+            {visible.map((entry) => {
+              const fileName = entry.modrinth?.filename ?? entry.curseforge?.file_name ?? "";
+              const active = progress[fileName];
+              const percent =
+                active && active.total > 0
+                  ? Math.min(100, Math.round((active.downloaded / active.total) * 100))
+                  : null;
+              return (
               <div className="file-row" key={entry.key}>
                 <div>
                   <strong>{entry.title}</strong>
                   <small>{entry.detail}</small>
+                  {busyKey === entry.key && percent !== null && (
+                    <div className="download-progress">
+                      <div className="progress-track">
+                        <div className="progress-fill" style={{ width: `${percent}%` }} />
+                      </div>
+                      <small>
+                        {percent}% · {formatBytes(active.downloaded)}
+                        {active.total > 0 ? ` / ${formatBytes(active.total)}` : ""}
+                      </small>
+                    </div>
+                  )}
                 </div>
                 <button
                   className="ghost-button"
@@ -1253,7 +1286,8 @@ function FilePanel({
                   )}
                 </button>
               </div>
-            ))}
+              );
+            })}
             {entries.length > 15 && (
               <button className="text-button" onClick={() => setShowAll((value) => !value)}>
                 {showAll ? "收起文件列表" : `显示全部 ${entries.length} 个文件`}
@@ -1263,6 +1297,109 @@ function FilePanel({
         </div>
       </section>
     </div>
+  );
+}
+
+function MultiplayerCard({ onNotice }: { onNotice: (message: string) => void }) {
+  const [status, setStatus] = useState<MpStatus | null>(null);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [log, setLog] = useState<string[]>([]);
+
+  useEffect(() => {
+    api.mpStatus().then(setStatus).catch(() => undefined);
+    const unlisten = listen<{ line: string }>("mp-log", (event) => {
+      setLog((previous) => [...previous.slice(-80), event.payload.line]);
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  const act = async (action: () => Promise<MpStatus>, key: string, done?: string) => {
+    setBusy(key);
+    try {
+      const next = await action();
+      setStatus(next);
+      if (done) onNotice(done);
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="settings-card multiplayer-card">
+      <div className="settings-heading">
+        <div className="setting-icon network">
+          <Globe2 size={22} />
+        </div>
+        <div>
+          <h3>联机（EasyTier 虚拟局域网）</h3>
+          <p>
+            创建房间后对局域网开放世界，朋友用房间码加入并连接你的虚拟 IP；需要管理员权限创建虚拟网卡。
+          </p>
+        </div>
+      </div>
+      <div className="settings-actions" style={{ justifyContent: "flex-start" }}>
+        <button
+          className="primary-button"
+          onClick={() => void act(() => api.mpHost(), "host", "房间已创建；把房间码发给朋友")}
+          disabled={busy !== null}
+        >
+          {busy === "host" ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />} 创建房间
+        </button>
+        <input
+          value={code}
+          onChange={(event) => setCode(event.target.value)}
+          placeholder="房间码：网络名#密钥"
+          spellCheck={false}
+        />
+        <button
+          className="ghost-button"
+          onClick={() => void act(() => api.mpJoin(code), "join", "已加入房间，等待分配虚拟 IP")}
+          disabled={busy !== null || !code.trim()}
+        >
+          {busy === "join" ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />} 加入房间
+        </button>
+        <button
+          className="ghost-button"
+          onClick={() => void act(() => api.mpStop(), "stop", "联机已停止")}
+          disabled={busy !== null}
+        >
+          停止
+        </button>
+      </div>
+      {status?.running && (
+        <div className="mp-status">
+          <span className="pill mini">进行中</span>
+          <span>
+            角色：{status.role === "host" ? "房主" : "客人"} · 房间码{" "}
+            <strong>{status.room_code}</strong> · 虚拟 IP：<strong>{status.virtual_ip || "分配中…"}</strong> ·
+            已连接节点 {status.peers_connected}
+          </span>
+          <button
+            className="text-button"
+            onClick={() => {
+              void navigator.clipboard
+                ?.writeText(status.room_code)
+                .then(() => onNotice("房间码已复制"))
+                .catch(() => onNotice("复制失败，请手动选择房间码"));
+            }}
+          >
+            复制房间码
+          </button>
+        </div>
+      )}
+      {log.length > 0 && (
+        <div className="mp-log">
+          {log.slice(-12).map((line, index) => (
+            <div key={index}>{line}</div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -1327,6 +1464,7 @@ function Instances({
 
   return (
     <div className="page-stack">
+      <MultiplayerCard onNotice={onNotice} />
       <section className="section-heading">
         <div>
           <span className="eyebrow">ISOLATED INSTANCES</span>
@@ -1927,6 +2065,7 @@ function SettingsPage({
   const [sakuraEnabled, setSakuraEnabled] = useState(settings.sakura_enabled);
   const [sharedGameDir, setSharedGameDir] = useState(settings.shared_game_dir);
   const [downloadSource, setDownloadSource] = useState(settings.download_source || "official");
+  const [mpPeers, setMpPeers] = useState(settings.mp_peers || "");
   const [msClientId, setMsClientId] = useState(settings.ms_client_id);
   const [accounts, setAccounts] = useState<AccountView[]>([]);
   const [offlineName, setOfflineName] = useState("");
@@ -1961,6 +2100,7 @@ function SettingsPage({
     setSakuraEnabled(settings.sakura_enabled);
     setSharedGameDir(settings.shared_game_dir);
     setDownloadSource(settings.download_source || "official");
+    setMpPeers(settings.mp_peers || "");
     setMsClientId(settings.ms_client_id);
   }, [settings]);
 
@@ -2015,6 +2155,7 @@ function SettingsPage({
       ...settings,
       download_source: downloadSource,
       shared_game_dir: sharedGameDir.trim(),
+      mp_peers: mpPeers.trim(),
     });
     onNotice("下载与共享目录设置已保存");
   };
@@ -2607,6 +2748,15 @@ function SettingsPage({
             <option value="bmclapi">BMCLAPI 国内镜像</option>
             <option value="auto">自动（探测最优下载源）</option>
           </select>
+        </label>
+        <label className="field-label">
+          联机共享节点（可选，逗号分隔；留空使用内置默认节点）
+          <input
+            value={mpPeers}
+            onChange={(event) => setMpPeers(event.target.value)}
+            placeholder="tcp://public.easytier.cn:11010, tcp://my-node.example:11010"
+            spellCheck={false}
+          />
         </label>
         <label className="field-label">
           共享游戏目录（可选）

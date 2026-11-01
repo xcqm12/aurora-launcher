@@ -101,6 +101,7 @@ export type AppSettings = {
   download_source: string;
   ms_client_id: string;
   active_account: string;
+  mp_peers?: string;
 };
 export type ProxyTest = { ok: boolean; status: number; latency_ms: number; message: string };
 export type SakuraBackground = { data_url: string; cached: boolean };
@@ -142,6 +143,20 @@ export type LittleSkinOauthDevice = {
   verification_uri_complete?: string | null;
   expires_in: number;
   interval: number;
+};
+export type MpStatus = {
+  running: boolean;
+  role: string;
+  network_name: string;
+  room_code: string;
+  virtual_ip: string;
+  peers_connected: number;
+  log_tail: string[];
+};
+export type ResourceProgressPayload = {
+  filename: string;
+  downloaded: number;
+  total: number;
 };
 export type LittleSkinOauthPoll = {
   status: string;
@@ -255,6 +270,10 @@ export const api = {
   yggdrasilSelect: (pendingId: string, profileId: string) =>
     invoke<AccountView>("yggdrasil_select", { pendingId, profileId }),
   littleskinOauthStart: () => invoke<LittleSkinOauthDevice>("littleskin_oauth_start"),
+  mpHost: () => invoke<MpStatus>("mp_host"),
+  mpJoin: (code: string) => invoke<MpStatus>("mp_join", { code }),
+  mpStop: () => invoke<MpStatus>("mp_stop"),
+  mpStatus: () => invoke<MpStatus>("mp_status"),
   littleskinOauthPoll: (deviceCode: string) =>
     invoke<LittleSkinOauthPoll>("littleskin_oauth_poll", { deviceCode }),
 };

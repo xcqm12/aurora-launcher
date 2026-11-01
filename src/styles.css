@@ -1531,6 +1531,68 @@ button:disabled {
   min-width: 0;
 }
 
+.download-progress {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+  max-width: 360px;
+}
+
+.progress-track {
+  height: 6px;
+  border-radius: 99px;
+  background: #1a2337;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #7ea7ff, #8ff0c8);
+  transition: width 0.2s ease;
+}
+
+.mp-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #2d3a54;
+  border-radius: 10px;
+  background: #0d1524;
+  font-size: 12px;
+  color: #a6b2c8;
+}
+
+.mp-log {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #233049;
+  border-radius: 10px;
+  background: #0b1120;
+  max-height: 180px;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: #8fa0bb;
+  display: grid;
+  gap: 2px;
+}
+
+.multiplayer-card .settings-actions input {
+  flex: 1;
+  min-width: 220px;
+  padding: 10px 12px;
+  border: 1px solid #2d3a54;
+  border-radius: 9px;
+  outline: 0;
+  background: #0d1524;
+  color: #edf3ff;
+  font-size: 12px;
+}
+
 .external-login {
   display: grid;
   gap: 10px;

@@ -1,6 +1,7 @@
 mod auth;
 mod launch;
 mod loaders;
+mod multiplayer;
 mod packs;
 mod yggdrasil;
 
@@ -63,6 +64,8 @@ pub(crate) struct AppSettings {
     pub(crate) ms_client_id: String,
     #[serde(default)]
     pub(crate) active_account: String,
+    #[serde(default)]
+    pub(crate) mp_peers: String,
 }
 
 impl Default for AppSettings {
@@ -73,6 +76,7 @@ impl Default for AppSettings {
             shared_game_dir: String::new(),
             download_source: "official".into(),
             ms_client_id: String::new(),
+            mp_peers: String::new(),
             active_account: String::new(),
         }
     }
@@ -1103,7 +1107,75 @@ fn is_allowed_curseforge_download_url(parsed: &reqwest::Url) -> bool {
     parsed.scheme() == "https" && cdn_host
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct ResourceProgress {
+    filename: String,
+    downloaded: u64,
+    total: u64,
+}
+
+fn emit_resource_progress(
+    app: &tauri::AppHandle,
+    filename: &str,
+    downloaded: u64,
+    total: u64,
+) {
+    let _ = app.emit(
+        "resource-progress",
+        ResourceProgress {
+            filename: filename.to_string(),
+            downloaded,
+            total,
+        },
+    );
+}
+
+/// Stream a resource download, emitting `resource-progress` every 256 KiB and
+/// on completion, then verify size and hashes.
+async fn verified_bytes_streaming(
+    app: &tauri::AppHandle,
+    client: &reqwest::Client,
+    parsed: reqwest::Url,
+    expected_size: u64,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    if expected_size > 512 * 1024 * 1024 {
+        return Err("文件超过 512 MiB 安全上限".into());
+    }
+    emit_resource_progress(app, label, 0, expected_size);
+    let response = client
+        .get(parsed)
+        .send()
+        .await
+        .map_err(|e| format!("下载失败：{e}"))?
+        .error_for_status()
+        .map_err(|_| "下载服务器返回错误状态".to_string())?;
+    let total = response.content_length().unwrap_or(expected_size);
+    let mut bytes: Vec<u8> = Vec::with_capacity(total.min(64 * 1024 * 1024) as usize);
+    let mut last_emit = 0u64;
+    let mut response = response;
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                bytes.extend_from_slice(&chunk);
+                if bytes.len() as u64 - last_emit >= 262_144 {
+                    last_emit = bytes.len() as u64;
+                    emit_resource_progress(app, label, last_emit, total);
+                }
+            }
+            Ok(None) => break,
+            Err(error) => return Err(format!("读取下载内容失败：{error}")),
+        }
+    }
+    emit_resource_progress(app, label, bytes.len() as u64, total);
+    if expected_size > 0 && bytes.len() as u64 != expected_size {
+        return Err("文件大小校验失败".into());
+    }
+    Ok(bytes)
+}
+
 async fn verified_curseforge_bytes(
+    app: &tauri::AppHandle,
     file: &CurseForgeFile,
     client: &reqwest::Client,
 ) -> Result<Vec<u8>, String> {
@@ -1115,23 +1187,14 @@ async fn verified_curseforge_bytes(
     if !is_allowed_curseforge_download_url(&parsed) {
         return Err("下载地址不是受支持的 CurseForge HTTPS 来源".into());
     }
-    if file.file_length > 512 * 1024 * 1024 {
-        return Err("文件超过 512 MiB 安全上限".into());
-    }
-    let response = client
-        .get(parsed)
-        .send()
-        .await
-        .map_err(|e| format!("下载失败：{e}"))?
-        .error_for_status()
-        .map_err(|_| "下载服务器返回错误状态".to_string())?;
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("读取下载内容失败：{e}"))?;
-    if file.file_length > 0 && bytes.len() as u64 != file.file_length {
-        return Err("文件大小校验失败".into());
-    }
+    let bytes = verified_bytes_streaming(
+        app,
+        client,
+        parsed,
+        file.file_length,
+        &file.file_name,
+    )
+    .await?;
     if let Some(expected) = file.sha1.as_deref() {
         use sha1::{Digest, Sha1};
         if hex::encode(Sha1::digest(&bytes)) != expected.to_lowercase() {
@@ -1160,7 +1223,7 @@ async fn install_curseforge_file(
     fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
     let target = folder.join(&filename);
     let client = http_client(&app)?;
-    let bytes = verified_curseforge_bytes(&file, &client).await?;
+    let bytes = verified_curseforge_bytes(&app, &file, &client).await?;
     write_atomic(&target, &bytes)?;
     Ok(target.display().to_string())
 }
@@ -1177,7 +1240,7 @@ async fn download_curseforge_file(
     fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
     let target = folder.join(&filename);
     let client = http_client(&app)?;
-    let bytes = verified_curseforge_bytes(&file, &client).await?;
+    let bytes = verified_curseforge_bytes(&app, &file, &client).await?;
     write_atomic(&target, &bytes)?;
     Ok(target.display().to_string())
 }
@@ -1191,6 +1254,7 @@ fn is_allowed_modrinth_download_url(parsed: &reqwest::Url) -> bool {
 }
 
 async fn verified_modrinth_bytes(
+    app: &tauri::AppHandle,
     file: &ResourceFile,
     client: &reqwest::Client,
 ) -> Result<Vec<u8>, String> {
@@ -1198,23 +1262,8 @@ async fn verified_modrinth_bytes(
     if !is_allowed_modrinth_download_url(&parsed) {
         return Err("下载地址不是受支持的 Modrinth HTTPS 来源".into());
     }
-    if file.size > 512 * 1024 * 1024 {
-        return Err("文件超过 512 MiB 安全上限".into());
-    }
-    let response = client
-        .get(parsed)
-        .send()
-        .await
-        .map_err(|e| format!("下载失败：{e}"))?
-        .error_for_status()
-        .map_err(|_| "下载服务器返回错误状态".to_string())?;
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("读取下载内容失败：{e}"))?;
-    if file.size > 0 && bytes.len() as u64 != file.size {
-        return Err("文件大小校验失败".into());
-    }
+    let bytes =
+        verified_bytes_streaming(app, client, parsed, file.size, &file.filename).await?;
     if let Some(expected) = file.hashes.get("sha512").and_then(|v| v.as_str()) {
         use sha2::{Digest, Sha512};
         if hex::encode(Sha512::digest(&bytes)) != expected.to_lowercase() {
@@ -1242,7 +1291,7 @@ async fn install_modrinth_file(
     fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
     let target = folder.join(&filename);
     let client = http_client(&app)?;
-    let bytes = verified_modrinth_bytes(&file, &client).await?;
+    let bytes = verified_modrinth_bytes(&app, &file, &client).await?;
     write_atomic(&target, &bytes)?;
     Ok(target.display().to_string())
 }
@@ -1259,7 +1308,7 @@ async fn download_modrinth_file(
     fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
     let target = folder.join(&filename);
     let client = http_client(&app)?;
-    let bytes = verified_modrinth_bytes(&file, &client).await?;
+    let bytes = verified_modrinth_bytes(&app, &file, &client).await?;
     write_atomic(&target, &bytes)?;
     Ok(target.display().to_string())
 }
@@ -1377,6 +1426,7 @@ fn save_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), Str
             },
             ms_client_id: settings.ms_client_id.trim().to_string(),
             active_account: settings.active_account,
+            mp_peers: settings.mp_peers.trim().to_string(),
         },
     )
 }
@@ -2602,6 +2652,37 @@ async fn ms_check_client_id(
 }
 
 #[tauri::command]
+async fn mp_host(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, multiplayer::MultiplayerState>,
+) -> Result<multiplayer::MpStatus, String> {
+    multiplayer::host(&app, state.inner()).await
+}
+
+#[tauri::command]
+async fn mp_join(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, multiplayer::MultiplayerState>,
+    code: String,
+) -> Result<multiplayer::MpStatus, String> {
+    multiplayer::join(&app, state.inner(), &code).await
+}
+
+#[tauri::command]
+fn mp_stop(
+    state: tauri::State<'_, multiplayer::MultiplayerState>,
+) -> Result<multiplayer::MpStatus, String> {
+    Ok(multiplayer::stop(state.inner()))
+}
+
+#[tauri::command]
+fn mp_status(
+    state: tauri::State<'_, multiplayer::MultiplayerState>,
+) -> Result<multiplayer::MpStatus, String> {
+    Ok(multiplayer::status(state.inner()))
+}
+
+#[tauri::command]
 async fn yggdrasil_login(
     app: tauri::AppHandle,
     server: String,
@@ -2801,6 +2882,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(LaunchState::default())
+        .manage(multiplayer::MultiplayerState::default())
         .invoke_handler(tauri::generate_handler![
             app_info,
             set_curseforge_key,
@@ -2849,6 +2931,10 @@ pub fn run() {
             ms_start_login,
             ms_poll_login,
             ms_check_client_id,
+            mp_host,
+            mp_join,
+            mp_stop,
+            mp_status,
             yggdrasil_login,
             yggdrasil_select,
             littleskin_oauth_start,

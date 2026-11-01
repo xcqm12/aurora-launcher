@@ -1,6 +1,15 @@
 # Aurora Launcher
 
-Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录；0.4.5 增加 LittleSkin OAuth 授权登录并消除子进程控制台窗口；0.4.6 补上 LittleSkin 应用管理与白名单申请入口；0.4.7 让 OAuth 登录支持刷新令牌续期；0.4.8 内置已过审的微软 Client ID，开箱可正版登录；0.4.9 下载 MC 本体时即可选择加载器并自动安装（OptiFine / LiteLoader 也自动化）；0.4.10 下载源支持官方/镜像/自动探测最优，加载器安装全面走镜像。
+Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录；0.4.5 增加 LittleSkin OAuth 授权登录并消除子进程控制台窗口；0.4.6 补上 LittleSkin 应用管理与白名单申请入口；0.4.7 让 OAuth 登录支持刷新令牌续期；0.4.8 内置已过审的微软 Client ID，开箱可正版登录；0.4.9 下载 MC 本体时即可选择加载器并自动安装（OptiFine / LiteLoader 也自动化）；0.4.10 下载源支持官方/镜像/自动探测最优，加载器安装全面走镜像。；0.5.0 模组下载显示实时进度，新增基于 EasyTier 的联机（对齐 PCL-CE）。
+
+## 0.5.0 更新内容
+
+- **模组/材质/光影下载实时进度**：Modrinth 与 CurseForge 文件下载改为流式，每 256 KiB 通过 `resource-progress` 事件推送进度，文件抽屉里显示百分比与已下载/总大小（此前只有转圈无数字）。
+- **联机功能（EasyTier，实验）**：实例页新增“联机”卡片——创建房间 / 房间码加入 / 停止。原理与 PCL-CE 一致：EasyTier 去中心化虚拟局域网，主机固定 `10.144.144.1`，客人 DHCP 自动取同子网地址（已实测分配 `10.144.144.2/24`）；主机创建世界后“对局域网开放”，朋友连接主机的虚拟 IP 即可进服。
+- EasyTier 首次使用从 GitHub Releases 自动下载（windows-x86_64，校验压缩包并解包到应用数据目录）；房间码格式 `网络名#密钥`，创建时自动生成。
+- 共享节点（用于打洞/中继）可在设置页配置，留空使用内置候选。注意：**EasyTier 官方公共节点截至 2026-11 已下线**（`public.easytier.cn/.top` 均 NXDOMAIN），自建或第三方节点需在设置里填写，多个用逗号分隔。
+- 创建虚拟网卡（TUN）需要管理员权限；非管理员运行时 EasyTier 会失败并在日志中提示。
+- 本地已验证：双节点组网（主机 + 客人经局域网地址互连）、TUN 创建、DHCP 取址、房间码解析；跨互联网打洞取决于所选共享节点质量。
 
 ## 0.4.10 更新内容
 
@@ -100,7 +109,8 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成
 - Vanilla 1.20.1 / 1.21.1 及 Fabric 1.20.1 的实际启动测试（本机现有游戏文件 + Java 17/21）。
 - 每个实例独立 `instance.json`、`game/versions|libraries|assets|natives`、`mods`、`resourcepacks`、`shaderpacks`、`saves`、`datapacks`、`config`、`logs`、`downloads`。
 - 启动失败会返回具体阶段（Java、版本 JSON、下载、natives、参数、进程），日志通过 Tauri 事件推送到控制台面板。
-- Modrinth / CurseForge 资源搜索与校验安装；CurseForge 密钥 DPAPI 保存，不进入日志和前端。
+- Modrinth / CurseForge 资源搜索与校验安装（流式下载 + 实时进度）；CurseForge 密钥 DPAPI 保存，不进入日志和前端。
+- EasyTier 联机：创建/加入房间、房间码、虚拟 IP 展示、日志面板（实验功能，见“联机”章节）。
 - LittleSkin（Yggdrasil + authlib-injector）登录：账户/密码验证、令牌刷新、多角色选择、启动注入与注入器校验下载。
 
 ## 尚未实现 / 限制
@@ -127,6 +137,15 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成
 - 微软：Azure 应用注册选择包含个人 Microsoft 账户的账户类型，添加 Web 平台重定向 `https://www.microsoft.com/link` 并启用“允许公共客户端流”；不需要在门户添加 API 权限。设置页填 Client ID 后点微软登录，按提示访问 `microsoft.com/link` 并输入设备码。
 - LittleSkin：设置页填写 LittleSkin 邮箱/用户名和密码，通过 Yggdrasil 认证；多角色账户会要求选择角色。启动时自动下载并用 `-javaagent` 注入 authlib-injector，令牌过期会先刷新再启动。
 - 刷新令牌、Minecraft 访问令牌与 Yggdrasil 令牌均 DPAPI 加密存于 `%APPDATA%\com.aurora.launcher\accounts.json`；密码从不落盘。
+
+## 联机（EasyTier，实验）
+
+- 原理与 PCL-CE 相同：每个玩家运行一个 `easytier-core` 节点，相同网络名 + 密钥的节点组成虚拟局域网；共享节点负责打洞（直连）或中继（绕行）。
+- 使用：实例页“联机”卡片 → 房主点“创建房间”（生成 `aurora-xxxxxx#密钥`），启动 Minecraft 对局域网开放；朋友填房间码点“加入房间”，卡片上会显示各自的虚拟 IP（主机固定 10.144.144.1，客人 DHCP 自动分配），多人联机时直连该 IP:端口。
+- 节点配置：设置页“联机共享节点”，逗号分隔；留空使用内置候选（`public.easytier.cn/.top`、`kkrainbow.top`——官方节点 2026-11 已下线，需要自建或社区节点才能跨网联机）。
+- 权限：EasyTier 需要 TUN 虚拟网卡，Windows 下必须以管理员身份运行启动器，否则进程启动失败（日志有提示）。
+- 安全：房间码含网络密钥，只发给要一起玩的人；联机日志只在本机显示，不上传。
+- 首次使用会从 GitHub 下载 EasyTier（约 30MB）到 `%APPDATA%\com.aurora.launcher\easytier\`。
 
 ## 镜像与代理
 
@@ -211,7 +230,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.4.10>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.5.0>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）
 
@@ -306,7 +325,7 @@ LittleSkin 是 Yggdrasil（authlib-injector）体系，和微软登录互不影�
 ## Cloudflare 锁区网关（qlmtest.dpdns.org）
 
 - 域名已托管在 Cloudflare（NS：fred/magali.ns.cloudflare.com），是独立 zone，不是 dpdns.org 的子记录。
-- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.10 Release 资产回源，`PATH_PREFIX=/aurora`。
+- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.5.0 Release 资产回源，`PATH_PREFIX=/aurora`。
 - 本地已验证：CN 请求 403，其他地区 200 且回源到正确的 Release 资产 URL。
 - **尚未部署**：需要 Cloudflare 凭据。你提供的 32 位 Key 是 Global API Key（需配邮箱、全账号权限，不推荐），建议在 Cloudflare 面板创建 Scoped Token（Workers Scripts:Edit、Zone Workers Routes:Edit、DNS:Edit、Zone:Read，范围限 qlmtest.dpdns.org），然后：
 

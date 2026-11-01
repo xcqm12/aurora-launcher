@@ -2111,6 +2111,7 @@ function SettingsPage({
   const [mpPeers, setMpPeers] = useState(settings.mp_peers || "");
   const [msClientId, setMsClientId] = useState(settings.ms_client_id);
   const [instancesDir, setInstancesDir] = useState(settings.instances_dir || "");
+  const [dataDir, setDataDir] = useState(settings.data_dir || "");
   const [sakuraSource, setSakuraSource] = useState(settings.sakura_source || "");
   const [accounts, setAccounts] = useState<AccountView[]>([]);
   const [offlineName, setOfflineName] = useState("");
@@ -2147,6 +2148,7 @@ function SettingsPage({
     setDownloadSource(settings.download_source || "official");
     setMpPeers(settings.mp_peers || "");
     setInstancesDir(settings.instances_dir || "");
+    setDataDir(settings.data_dir || "");
     setSakuraSource(settings.sakura_source || "");
     setMsClientId(settings.ms_client_id);
   }, [settings]);
@@ -2204,9 +2206,14 @@ function SettingsPage({
       shared_game_dir: sharedGameDir.trim(),
       mp_peers: mpPeers.trim(),
       instances_dir: instancesDir.trim(),
+      data_dir: dataDir.trim(),
       sakura_source: sakuraSource.trim(),
     });
-    onNotice("下载与目录设置已保存");
+    onNotice(
+      dataDir.trim() && dataDir.trim() !== (settings.data_dir || "")
+        ? "数据目录已更新，现有数据（账户/实例索引/缓存）已复制到新位置；引导配置仍保留在默认目录"
+        : "下载与目录设置已保存",
+    );
   };
 
   const chooseSharedDir = async () => {
@@ -2808,7 +2815,27 @@ function SettingsPage({
           />
         </label>
         <label className="field-label">
-          实例存储目录（可选；留空使用默认 C 盘 AppData，仅对新实例生效）
+          数据目录（账户、实例索引、EasyTier 等缓存的根目录；修改后自动把现有数据复制到新位置，引导配置保留在默认位置）
+          <div className="inline-field">
+            <input
+              value={dataDir}
+              onChange={(event) => setDataDir(event.target.value)}
+              placeholder="留空使用默认（C 盘 AppData\com.aurora.launcher）"
+              spellCheck={false}
+            />
+            <button
+              className="ghost-button"
+              onClick={async () => {
+                const path = await api.pickFolder();
+                if (path) setDataDir(path);
+              }}
+            >
+              浏览
+            </button>
+          </div>
+        </label>
+        <label className="field-label">
+          实例存储目录（可选；留空时新实例放在数据目录的 instances 下，仅对新实例生效）
           <div className="inline-field">
             <input
               value={instancesDir}

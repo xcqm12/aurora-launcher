@@ -103,6 +103,7 @@ export type AppSettings = {
   active_account: string;
   mp_peers?: string;
   instances_dir?: string;
+  data_dir?: string;
   sakura_source?: string;
 };
 export type ProxyTest = { ok: boolean; status: number; latency_ms: number; message: string };

@@ -2,6 +2,11 @@
 
 Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游戏启动与加载器自动安装、微软正版/LittleSkin/离线登录、整合包导入导出、镜像加速、EasyTier 联机。历史版本更新记录见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
+## 0.5.4 更新内容
+
+- **数据目录也可自定义**：设置 → 下载与目录 → “数据目录”，可浏览选择任意磁盘位置（账户、实例索引、EasyTier/注入器缓存等的根目录）。修改保存后自动把现有数据复制到新位置（原件保留作备份），引导配置 settings.json 固定留在默认位置用于定位，二者关系与迁移行为已在界面说明。实例存储目录继续作为新实例位置的进一步覆盖。
+- 樱花主题、联机节点等 0.5.3 功能不变。
+
 ## 0.5.3 更新内容
 
 - **实例存储目录可选**：设置 → 下载与目录 → “实例存储目录”，可浏览选择磁盘与目录；留空仍使用默认（C 盘 AppData）。仅对新创建的实例生效，已有实例路径不变；联机节点、共享目录设置不受影响。
@@ -142,7 +147,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.5.3>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.5.4>
 - 分发下载页：<http://mcdles.us.ci/>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）
@@ -238,7 +243,7 @@ LittleSkin 是 Yggdrasil（authlib-injector）体系，和微软登录互不影�
 ## Cloudflare 锁区网关（qlmtest.dpdns.org）
 
 - 域名已托管在 Cloudflare（NS：fred/magali.ns.cloudflare.com），是独立 zone，不是 dpdns.org 的子记录。
-- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.5.3 Release 资产回源，`PATH_PREFIX=/aurora`。
+- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.5.4 Release 资产回源，`PATH_PREFIX=/aurora`。
 - 本地已验证：CN 请求 403，其他地区 200 且回源到正确的 Release 资产 URL。
 - **尚未部署**：需要 Cloudflare 凭据。你提供的 32 位 Key 是 Global API Key（需配邮箱、全账号权限，不推荐），建议在 Cloudflare 面板创建 Scoped Token（Workers Scripts:Edit、Zone Workers Routes:Edit、DNS:Edit、Zone:Read，范围限 qlmtest.dpdns.org），然后：
 

@@ -69,6 +69,8 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) instances_dir: String,
     #[serde(default)]
+    pub(crate) data_dir: String,
+    #[serde(default)]
     pub(crate) sakura_source: String,
 }
 
@@ -82,6 +84,7 @@ impl Default for AppSettings {
             ms_client_id: String::new(),
             mp_peers: String::new(),
             instances_dir: String::new(),
+            data_dir: String::new(),
             sakura_source: String::new(),
             active_account: String::new(),
         }
@@ -162,8 +165,37 @@ struct CurseForgeFile {
     sha1: Option<String>,
 }
 
-pub(crate) fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+/// 引导目录固定在默认位置（AppData），其中的 settings.json 存放
+/// `data_dir` 指针；其余数据（账户、实例索引、缓存）都可以整体迁移。
+pub(crate) fn bootstrap_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|e| e.to_string())
+}
+
+/// Parse the `data_dir` pointer out of a raw settings.json body.
+fn effective_data_dir(base: &Path, pointer_text: Option<&str>) -> PathBuf {
+    let Some(text) = pointer_text else {
+        return base.to_path_buf();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return base.to_path_buf();
+    };
+    let Some(dir) = value.get("data_dir").and_then(|item| item.as_str()) else {
+        return base.to_path_buf();
+    };
+    let trimmed = dir.trim();
+    if trimmed.is_empty() {
+        return base.to_path_buf();
+    }
+    let custom = PathBuf::from(trimmed);
+    let _ = fs::create_dir_all(&custom);
+    custom
+}
+
+pub(crate) fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let base = bootstrap_dir(app)?;
+    let pointer = base.join("settings.json");
+    let text = fs::read_to_string(&pointer).ok();
+    Ok(effective_data_dir(&base, text.as_deref()))
 }
 
 fn instances_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -1423,27 +1455,84 @@ fn get_settings(app: tauri::AppHandle) -> AppSettings {
     read_settings(&app)
 }
 
+fn migrate_data_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    if !from.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if to.exists() {
+        return Ok(());
+    }
+    fs::copy(from, to).map(|_| ())
+}
+
+fn migrate_data_subdir(from: &Path, to: &Path) -> std::io::Result<u32> {
+    if !from.is_dir() {
+        return Ok(0);
+    }
+    let mut copied = 0u32;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copied += migrate_data_subdir(&entry.path(), &target)?;
+        } else if !target.exists() {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(entry.path(), &target)?;
+            copied += 1;
+        }
+    }
+    Ok(copied)
+}
+
 #[tauri::command]
 fn save_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), String> {
     let proxy = normalized_proxy(&settings.proxy)?;
-    write_settings(
-        &app,
-        &AppSettings {
-            proxy,
-            sakura_enabled: settings.sakura_enabled,
-            shared_game_dir: settings.shared_game_dir.trim().to_string(),
-            download_source: match settings.download_source.as_str() {
-                "bmclapi" => "bmclapi".into(),
-                "auto" => "auto".into(),
-                _ => "official".into(),
-            },
-            ms_client_id: settings.ms_client_id.trim().to_string(),
-            active_account: settings.active_account,
-            mp_peers: settings.mp_peers.trim().to_string(),
-            instances_dir: settings.instances_dir.trim().to_string(),
-            sakura_source: settings.sakura_source.trim().to_string(),
+    let previous_dir = data_dir(&app)?;
+    let next = AppSettings {
+        proxy,
+        sakura_enabled: settings.sakura_enabled,
+        shared_game_dir: settings.shared_game_dir.trim().to_string(),
+        download_source: match settings.download_source.as_str() {
+            "bmclapi" => "bmclapi".into(),
+            "auto" => "auto".into(),
+            _ => "official".into(),
         },
-    )
+        ms_client_id: settings.ms_client_id.trim().to_string(),
+        active_account: settings.active_account,
+        mp_peers: settings.mp_peers.trim().to_string(),
+        instances_dir: settings.instances_dir.trim().to_string(),
+        data_dir: settings.data_dir.trim().to_string(),
+        sakura_source: settings.sakura_source.trim().to_string(),
+    };
+    // 先把带新 data_dir 指针的引导配置写回默认位置，使 data_dir() 立即
+    // 指向新目录；然后把旧目录里的数据复制过去（保留原件作备份）。
+    write_settings(&app, &next)?;
+    let target_dir = data_dir(&app)?;
+    if target_dir != previous_dir {
+        let mut report = Vec::new();
+        for name in ["accounts.json", "instances.json", "sakura.img", "sakura.meta"] {
+            match migrate_data_file(&previous_dir.join(name), &target_dir.join(name)) {
+                Ok(()) => report.push(name.to_string()),
+                Err(error) => report.push(format!("{name} 失败：{error}")),
+            }
+        }
+        for dir in ["authlib", "easytier"] {
+            match migrate_data_subdir(&previous_dir.join(dir), &target_dir.join(dir)) {
+                Ok(count) if count > 0 => report.push(format!("{dir}/ {count} 个文件")),
+                Ok(_) => {}
+                Err(error) => report.push(format!("{dir}/ 失败：{error}")),
+            }
+        }
+        // 引导配置也要落在新目录，read_settings 才能读到完整设置。
+        write_settings(&app, &next)?;
+        let _ = report;
+    }
+    Ok(())
 }
 
 #[tauri::command]

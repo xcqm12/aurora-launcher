@@ -1,113 +1,12 @@
 # Aurora Launcher
 
-Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录；0.4.5 增加 LittleSkin OAuth 授权登录并消除子进程控制台窗口；0.4.6 补上 LittleSkin 应用管理与白名单申请入口；0.4.7 让 OAuth 登录支持刷新令牌续期；0.4.8 内置已过审的微软 Client ID，开箱可正版登录；0.4.9 下载 MC 本体时即可选择加载器并自动安装（OptiFine / LiteLoader 也自动化）；0.4.10 下载源支持官方/镜像/自动探测最优，加载器安装全面走镜像。；0.5.0 模组下载显示实时进度，新增基于 EasyTier 的联机（对齐 PCL-CE）。；0.5.1 加载器安装失败自动预下载缺失库并重试。
+Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游戏启动与加载器自动安装、微软正版/LittleSkin/离线登录、整合包导入导出、镜像加速、EasyTier 联机。历史版本更新记录见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
-## 0.5.1 更新内容
+## 0.5.2 更新内容
 
-- **加载器安装自动重试与缺库预下载**：Forge/NeoForge 安装器自带的下载链（优先 maven.creeperhost.net）偶发坏文件——实测 trove-1.0.2 与 mixin-0.8.5 校验失败被删后整个安装中止。现在安装器失败时自动解析“These libraries failed to download”清单，从 BMCLAPI / Sponge 仓库 / Maven Central 预下载缺失库到实例 libraries（安装器自身仍会做 SHA-1 校验），再自动重试，最多 3 次；每次尝试的日志都保留在结果里。
-- 坐标解析支持带 classifier 的库（如 `net.minecraftforge:mergetool:1.1.9:fat`），附单元测试（用真实故障日志做样例）。
-
-## 0.5.0 更新内容
-
-- **模组/材质/光影下载实时进度**：Modrinth 与 CurseForge 文件下载改为流式，每 256 KiB 通过 `resource-progress` 事件推送进度，文件抽屉里显示百分比与已下载/总大小（此前只有转圈无数字）。
-- **联机功能（EasyTier，实验）**：实例页新增“联机”卡片——创建房间 / 房间码加入 / 停止。原理与 PCL-CE 一致：EasyTier 去中心化虚拟局域网，主机固定 `10.144.144.1`，客人 DHCP 自动取同子网地址（已实测分配 `10.144.144.2/24`）；主机创建世界后“对局域网开放”，朋友连接主机的虚拟 IP 即可进服。
-- EasyTier 首次使用从 GitHub Releases 自动下载（windows-x86_64，校验压缩包并解包到应用数据目录）；房间码格式 `网络名#密钥`，创建时自动生成。
-- 共享节点（用于打洞/中继）可在设置页配置，留空使用内置候选。注意：**EasyTier 官方公共节点截至 2026-11 已下线**（`public.easytier.cn/.top` 均 NXDOMAIN），自建或第三方节点需在设置里填写，多个用逗号分隔。
-- 创建虚拟网卡（TUN）需要管理员权限；非管理员运行时 EasyTier 会失败并在日志中提示。
-- 本地已验证：双节点组网（主机 + 客人经局域网地址互连）、TUN 创建、DHCP 取址、房间码解析；跨互联网打洞取决于所选共享节点质量。
-
-## 0.4.10 更新内容
-
-- **自动下载源探测**：`auto` 不再是固定的“官方优先、失败回退”——启动与安装前并发探测 Mojang 官方和 BMCLAPI 的版本清单，取响应更快且可达的一边，结果缓存 10 分钟。实测：本机（代理直连海外）自动选中官方（0.7s vs 6.0s）；境内网络会自动选中 BMCLAPI。
-- **加载器安装接入镜像**：Forge / NeoForge 安装器与版本元数据、`ensure_vanilla`（版本清单 / 版本 JSON / client jar）全部支持 BMCLAPI 镜像候选，失败自动回退官方。BMCLAPI 对 NeoForge 的镜像会去掉 `/releases` 前缀（已实测可下载完整安装器，6.4MB）。
-- `mirror_url` 新增 `maven.minecraftforge.net` 与 `maven.neoforged.net` 映射，启动期 library 下载同样受益。
-- 不参与镜像的源（Fabric maven、GitHub、optifine.net、LiteLoader maven）自动模式下直接走官方，行为在 README 说明。
-- 设置页“自动”选项文案更新为“探测最优下载源”。
-
-## 0.4.9 更新内容
-
-- **创建实例即装加载器**：新建实例选择加载器后，创建完成自动下载官方安装器并执行，无需再到实例管理里手动装一次；失败时实例保留、可重试。
-- **OptiFine 全自动安装**：从 optifine.net 官网解析版本列表（实测解析出 225 个构建），按官方 `adloadx → downloadx` 流程下载安装器并校验为有效 JAR；官方安装器只有图形界面，内置约 20 行反射驱动（源码与 .class 一并提交）调用 `optifine.Installer.doInstall(目录)`，无头安装到所选实例，已实测生成 `1.20.1-OptiFine_HD_U_I6` 并更新 launcher_profiles.json。
-- **LiteLoader 官方元数据直装**：读取 dl.liteloader.com 的官方 versions.json，按 maven-metadata 解析时间戳快照，从 repo.mumfrey.com 下载核心 JAR（校验包含 LiteLoaderTweaker），预下载 launchwrapper/asm/mixin 依赖（快照解析为官方时间戳文件名），并按官方安装器产物构造 launchwrapper 版本 JSON。官方元数据的 md5 已过期对不上，改为“有效 JAR + 包含 Tweaker”放行并在日志说明。仅支持 1.12.2 及更早版本；本机无 Java 8，未做完整进游戏验证。
-- **LabyMod**：4.x 是独立启动器且官网有反爬保护，创建实例后自动打开官方下载页，提示把安装目标指向实例 game 目录。
-- 创建对话框与实例管理的加载器说明文案同步更新；`loader_versions` 现在返回 OptiFine 官网版本列表。
-
-## 0.4.8 更新内容
-
-- **内置 Aurora 自有 Azure 应用的 Client ID**（`ae897ba3-93b3-4998-a4fb-b80bad87b538`）。该应用于 2026-10-31 通过 Mojang appID 白名单审核（Mojang Enforcement 邮件确认，未发现封禁/拦截结果），微软设备码登录**开箱即用**，不再要求用户先注册 Azure。
-- 设置页 Client ID 输入框留空即用内置 ID；设置页、环境变量、构建注入三种覆盖方式保持不变，“验证”按钮在输入框为空时检测内置 ID。
-- 更新设置页说明与 README：Client ID 不是机密可以内置，但客户端 Secret 仍然绝不入库（设备码流程不需要它）。
-- Azure 侧配置记录：账户类型“所有 Microsoft 账户”、1 个 Web 重定向 URI（设备码流程实际不需要回调）、未创建任何客户端密钥。
-- LittleSkin 设备代码流白名单仍未通过（2026-10-31 实测仍返回 `invalid_client`），该申请继续等待；密码登录不受影响。
-
-## 0.4.7 更新内容
-
-- LittleSkin OAuth 授权登录申请 `offline_access`，把 OAuth 刷新令牌与 Yggdrasil 令牌一起 DPAPI 加密保存。
-- 启动前若 Yggdrasil 令牌失效且 `authserver/refresh` 也失败，自动用 OAuth 刷新令牌换新访问令牌并重新调用 `authserver/oauth` 签发 Minecraft 令牌；只有这一步也失败才提示重新授权。
-- 新增 UUID 无符号化处理，确保 `authserver/oauth` 请求与账号 UUID 格式一致；补充对应单元测试。
-- 仍受 LittleSkin 设备代码流白名单限制：未通过时授权与刷新接口都返回 `invalid_client`，README 与界面提示保持原样。
-
-## 0.4.6 更新内容
-
-- LittleSkin 授权登录旁新增「LittleSkin 应用管理」与「复制白名单申请」按钮：前者打开应用配置页，后者把应用名称、客户端 ID 800、Yggdrasil 权限列表和申请理由复制到剪贴板，可直接粘贴进工单邮件。
-- 说明文字更新为当前状态：回调已配置为 `https://open.littleskin.cn/oauth/callback`，但设备代码流白名单仍需邮件申请；实测未通过时返回 `invalid_client`。
-- README 同步回调配置与实测结果，避免把“改回调”和“通过白名单”混为一谈。
-
-## 0.4.5 更新内容
-
-- 新增 **LittleSkin OAuth 授权登录**（设备代码流，客户端 ID `800`）：浏览器授权并选择角色，再用 `POST https://littleskin.cn/api/yggdrasil/authserver/oauth` 换取 Minecraft 令牌；全程不需要密码，也不需要客户端 Secret。
-- 授权失败给出可执行原因：应用未加入设备代码流白名单时提示把回调设为 `https://open.littleskin.cn/oauth/callback` 并发送工单；scope 冲突时提示 `Read` 与 `Select` 不能同时申请。
-- 保留原有的 LittleSkin 账号密码（传统 Yggdrasil）登录作为备选。
-- **控制台窗口**：Java 版本探测、加载器安装器、`taskkill` 等所有子进程统一使用 `CREATE_NO_WINDOW`；启动游戏或安装加载器时不再闪出 cmd 窗口。发布版主程序本身保持 `windows` 子系统。
-- 不把图中客户端 Secret 写入仓库或二进制：设备代码流不需要它；该 Secret 已出现在对话中，建议在 LittleSkin 应用管理页重置。
-
-## 0.4.4 更新内容
-
-- 新增 **LittleSkin 登录**：邮箱/密码走 LittleSkin 的 Yggdrasil `authserver/authenticate`，令牌保存在本机，支持自动刷新与启动前校验；密码只发送给 littleskin.cn，不保存、不写日志。
-- 启动时注入 `authlib-injector`：`-javaagent` 与预取的 Yggdrasil 元数据（Base64）一起传给 JVM，皮肤与角色来自 LittleSkin；注入器从官方 `authlib-injector.yushi.moe` 下载并按接口给出的 SHA-256 校验，缓存在应用数据目录。
-- 多角色账户在设置页弹出角色选择；无角色时提示先到 littleskin.cn 创建。
-- 账户列表区分“微软正版 / LittleSkin / 离线”；外置登录使用 `msa` 用户类型与 Yggdrasil 令牌，不再要求微软 Client ID。
-- 启动参数中的启动器版本号改为读取 `CARGO_PKG_VERSION`，不再硬编码 0.4.1。
-
-## 0.4.3 更新内容
-
-- 设置页新增“验证”按钮：检查 Client ID 格式是否为 GUID，并用它请求一次设备码，提前发现应用不存在、账户类型错误、未启用公共客户端流等问题（不能替代 Mojang 审核）。
-- 设置页新增“Azure 应用注册”“Minecraft 应用审核”直达按钮，说明文字改为 Web 平台重定向 + 公共客户端流 + 审核要求。
-- 新增 `docs/mce-review-application.md`：申请材料清单、英文申请模板、常见拒绝原因，以及为什么不能借用 PCL2/HMCL 等他人已审核的 Client ID。
-- 明确一条产品边界：不内置、不提取、不冒用任何第三方 Azure Client ID。
-
-## 0.4.2 更新内容
-
-- 设备码请求追加 `?mkt=zh-CN` 与 `Accept-Language: zh-CN`，错误描述由微软本地化返回。
-- 设备码失败按 AADSTS 码给出修复建议：700016（应用不存在/账户类型不符）、7000218/7000215（未启用公共客户端流）、700005（权限不足）、404（未过 Minecraft 应用审核，附 aka.ms/mce-reviewappid）。
-- 轮询状态新增 `terminal` 标记：除 `pending`/`slow_down` 外全部停止自动轮询；`expired_token`、`bad_verification_code`、`invalid_client` 有独立状态与中文提示，不再反复轮询已消耗的设备码。
-- 无所有权/无许可证返回 `no_license`，设置页显示“打开 Minecraft 商店”按钮；支持 `verification_uri_complete` 直接打开带代码的登录页。
-- README 补充 Azure 注册要点与失败排查表。
-
-## 0.4.1 更新内容
-
-- 微软登录对齐 PCL2 / HMCL：使用 Minecraft 令牌的真实 `expires_in`（约 24h）而不是微软令牌的 1h；新增 `/entitlements/mcstore` 所有权检查与档案 404 的许可证判断。
-- 补全 XSTS `XErr` 映射（封禁、无 Xbox 档案、地区不支持、儿童账户），校验 Xbox 与 XSTS 的 `uhs` 一致；MC 登录 429/403/503 与封禁有明确提示。
-- MC access token 改为 DPAPI 加密后落盘（离线 token 除外）；刷新令牌失效时返回“请重新登录”，不静默成功。
-- 设备码 UX 对齐 PCL2：自动打开浏览器、复制代码、按 `interval` 自动轮询、处理 `slow_down`、过期/拒绝停止；保留手动检查。
-- 构建时可从 `AURORA_MS_CLIENT_ID` 注入 Client ID（GitHub Secret），运行时设置仍可覆盖；不内置任何第三方 Client ID。
-- Worker 增加 `PATH_PREFIX`，`wrangler.toml` 预置 `qlmtest.dpdns.org/aurora/*` 路由与 v0.4.1 资产源；尚未部署。
-
-## 0.4.0 更新内容
-
-- **游戏启动**：解析版本 JSON（含 `inheritsFrom` 继承）、下载 client jar/libraries/asset index/objects、解压 natives、构建 classpath 与 JVM/游戏参数、选择 Java、启动进程、实时日志与停止。
-- **镜像下载**：设置中可选 Mojang 官方、BMCLAPI 国内镜像或自动回退；BMCLAPI 做主机映射并按低并发请求，避免触发限流。
-- **共享游戏目录**：可指定现有 `.minecraft`/`.xmcl` 作为只读 assets/libraries/vanilla 版本来源；实例的 mods、saves、config、logs 仍独立。
-- **加载器自动安装**：Fabric、Legacy Fabric、Forge、NeoForge、Cleanroom 下载官方安装器并无头执行；安装后自动记录生成版本 id。OptiFine、LabyMod、LiteLoader 保留官方页面与手动导入。
-- **账户**：离线账户（Java 一致的离线 UUID）与微软设备码登录（MS → Xbox Live → XSTS → Minecraft → profile），刷新令牌用 DPAPI 加密保存。
-- **整合包/世界**：导入 `.mrpack`（校验 sha1/sha512、安全路径、overrides/client-overrides）与 CurseForge zip（需有效 API Key）；导入世界 zip 到 `saves`；导出 `.mrpack`。
-- **代码签名**：`scripts/sign-windows.ps1` 支持 PFX 或证书存储 thumbprint；CI 在配置 Secrets 时自动签名，未配置则跳过。
-- **锁区网关模板**：`server/region-gate/` 提供 Cloudflare Worker，按 `CF-IPCountry` 拦截并流式代理发布资产。
-
-## 0.3.0 更新内容
-
-- PCL 风格资源浏览器、热门预加载、来源/排序/版本/加载器筛选、分页、文件抽屉、收藏。
-- 多版本实例隔离、代理设置、樱花主题、滚动优化、双发行版构建与自动发布。
+- **加载器安装全程进度条**：下载安装器（Forge/NeoForge 约 6MB）、下载 MC 本体（实例首次安装时的原版 jar）、OptiFine 官网下载、EasyTier 下载（约 30MB）全部流式上报，每 256 KiB 刷新一次；运行安装器与预下载缺失库显示阶段进度（第 n 次/共 3 次、第 i/n 个库）。
+- 进度显示覆盖三处入口：创建实例对话框、实例管理“自动安装”、加载器页“安装到实例”。
+- README 精简：只保留当前版本更新内容，历史版本记录移至 RELEASE_NOTES.md。
 
 ## 已实现
 
@@ -236,7 +135,8 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.5.1>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.5.2>
+- 分发下载页：<http://mcdles.us.ci/>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）
 
@@ -331,7 +231,7 @@ LittleSkin 是 Yggdrasil（authlib-injector）体系，和微软登录互不影�
 ## Cloudflare 锁区网关（qlmtest.dpdns.org）
 
 - 域名已托管在 Cloudflare（NS：fred/magali.ns.cloudflare.com），是独立 zone，不是 dpdns.org 的子记录。
-- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.5.1 Release 资产回源，`PATH_PREFIX=/aurora`。
+- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.5.2 Release 资产回源，`PATH_PREFIX=/aurora`。
 - 本地已验证：CN 请求 403，其他地区 200 且回源到正确的 Release 资产 URL。
 - **尚未部署**：需要 Cloudflare 凭据。你提供的 32 位 Key 是 Global API Key（需配邮箱、全账号权限，不推荐），建议在 Cloudflare 面板创建 Scoped Token（Workers Scripts:Edit、Zone Workers Routes:Edit、DNS:Edit、Zone:Read，范围限 qlmtest.dpdns.org），然后：
 

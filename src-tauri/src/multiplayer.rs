@@ -222,7 +222,40 @@ async fn ensure_easytier(app: &tauri::AppHandle) -> Result<PathBuf, String> {
             response.status().as_u16()
         ));
     }
-    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    let total = response.content_length().unwrap_or(0);
+    let mut bytes: Vec<u8> = Vec::with_capacity(total.min(64 * 1024 * 1024) as usize);
+    let mut last_emit = 0u64;
+    let mut response = response;
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                bytes.extend_from_slice(&chunk);
+                if bytes.len() as u64 - last_emit >= 262_144 {
+                    last_emit = bytes.len() as u64;
+                    let _ = app.emit(
+                        "loader-progress",
+                        serde_json::json!({
+                            "stage": "下载 EasyTier",
+                            "filename": "easytier-windows-x86_64.zip",
+                            "downloaded": last_emit,
+                            "total": total,
+                        }),
+                    );
+                }
+            }
+            Ok(None) => break,
+            Err(error) => return Err(format!("读取 EasyTier 下载内容失败：{error}")),
+        }
+    }
+    let _ = app.emit(
+        "loader-progress",
+        serde_json::json!({
+            "stage": "下载 EasyTier",
+            "filename": "easytier-windows-x86_64.zip",
+            "downloaded": bytes.len(),
+            "total": total,
+        }),
+    );
     if bytes.len() > EASYTIER_MAX_BYTES {
         return Err("EasyTier 压缩包体积异常".into());
     }

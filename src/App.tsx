@@ -48,6 +48,7 @@ import {
   LittleSkinOauthDevice,
   ResourceProgressPayload,
   MpStatus,
+  LoaderProgressPayload,
 } from "./api";
 
 type View = "home" | "browse" | "instances" | "loaders" | "settings";
@@ -1300,6 +1301,39 @@ function FilePanel({
   );
 }
 
+function useLoaderProgress(active: boolean) {
+  const [progress, setProgress] = useState<LoaderProgressPayload | null>(null);
+  useEffect(() => {
+    if (!active) return;
+    const unlisten = listen<LoaderProgressPayload>("loader-progress", (event) => {
+      setProgress(event.payload);
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+      setProgress(null);
+    };
+  }, [active]);
+  return progress;
+}
+
+function LoaderProgressLine({ progress }: { progress: LoaderProgressPayload }) {
+  const percent =
+    progress.total > 0 ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100)) : null;
+  return (
+    <div className="download-progress">
+      <div className="progress-track">
+        <div className="progress-fill" style={{ width: `${percent ?? 0}%` }} />
+      </div>
+      <small>
+        {progress.stage}
+        {percent !== null
+          ? ` · ${percent}%${progress.total > 0 ? ` · ${formatBytes(progress.downloaded)} / ${formatBytes(progress.total)}` : ""}`
+          : ""}
+      </small>
+    </div>
+  );
+}
+
 function MultiplayerCard({ onNotice }: { onNotice: (message: string) => void }) {
   const [status, setStatus] = useState<MpStatus | null>(null);
   const [code, setCode] = useState("");
@@ -1576,6 +1610,7 @@ function InstanceManager({
   const [loaderVersion, setLoaderVersion] = useState(instance.loader_version ?? "");
   const [installLog, setInstallLog] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const managerProgress = useLoaderProgress(busy === "loader");
 
   const save = async () => {
     setBusy("save");
@@ -1719,6 +1754,7 @@ function InstanceManager({
                   {busy === "loader" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} 自动安装
                 </button>
               </div>
+              {busy === "loader" && managerProgress && <LoaderProgressLine progress={managerProgress} />}
               <p className="security-note">
                 Fabric / Legacy Fabric / Forge / NeoForge / Cleanroom 使用官方无头安装器；OptiFine、LabyMod、LiteLoader 请手动导入。
               </p>
@@ -1910,6 +1946,7 @@ function Loaders({
 
   const autoLoader = ["fabric", "legacyfabric", "forge", "neoforge", "cleanroom"].includes(focus);
 
+  const loadersProgress = useLoaderProgress(installing !== null);
   const installVersion = async (version: string) => {
     if (!target) {
       onNotice("请先创建一个实例作为安装目标");
@@ -2029,6 +2066,9 @@ function Loaders({
                       {installing === version ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}
                       安装到实例
                     </button>
+                  )}
+                  {installing === version && loadersProgress && (
+                    <LoaderProgressLine progress={loadersProgress} />
                   )}
                 </div>
               </div>
@@ -2853,6 +2893,8 @@ function CreateInstance({
   const [loaderVersion, setLoaderVersion] = useState("");
   const [loaderVersions, setLoaderVersions] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const installProgress = useLoaderProgress(installing);
   const releases = useMemo(
     () => (manifest?.versions ?? []).filter((item) => item.kind === "release").slice(0, 120),
     [manifest],
@@ -2895,6 +2937,7 @@ function CreateInstance({
         return;
       }
       if (loader !== "vanilla") {
+        setInstalling(true);
         onNotice(`正在下载并安装 ${version} 的 ${loader}，请稍候…`);
         try {
           const result = await api.installLoader(
@@ -2908,6 +2951,8 @@ function CreateInstance({
           onNotice(
             `实例已创建，但加载器安装失败：${String(installError)}。可在实例管理中重试。`,
           );
+        } finally {
+          setInstalling(false);
         }
       }
     } catch (error) {
@@ -2984,6 +3029,7 @@ function CreateInstance({
           <p className="security-note">
             每个实例会创建独立的 game、mods、resourcepacks、shaderpacks、saves、datapacks、logs 与 downloads 目录。
           </p>
+          {installing && installProgress && <LoaderProgressLine progress={installProgress} />}
           <div className="modal-actions">
             <button className="ghost-button" onClick={onClose}>
               取消

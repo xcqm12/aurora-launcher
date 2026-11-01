@@ -153,6 +153,12 @@ export type MpStatus = {
   peers_connected: number;
   log_tail: string[];
 };
+export type LoaderProgressPayload = {
+  stage: string;
+  filename: string;
+  downloaded: number;
+  total: number;
+};
 export type ResourceProgressPayload = {
   filename: string;
   downloaded: number;

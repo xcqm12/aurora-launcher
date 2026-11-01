@@ -1,4 +1,9 @@
-# Aurora Launcher v0.5.1
+# Aurora Launcher v0.5.2
+
+- 加载器安装全程进度条：安装器下载、MC 本体下载、OptiFine 官网下载、EasyTier 下载流式上报（每 256 KiB），运行安装器与预下载缺失库显示阶段进度；创建实例对话框、实例管理、加载器页三处入口均显示。
+- README 精简为只显示当前版本更新内容，历史版本记录移至 RELEASE_NOTES.md。
+
+# Aurora Launcher v0.5.1（历史）
 
 - 加载器安装失败自动恢复：解析 Forge/NeoForge 安装器的失败库清单，从 BMCLAPI / Sponge 仓库 / Maven Central 预下载到实例 libraries，再自动重试安装器（最多 3 次），瞬时坏镜像（如 creeperhost 返回损坏的 trove/mixin）不再导致整个安装中止。
 - 坐标解析支持带 classifier 的库；每次尝试日志保留在安装结果里。

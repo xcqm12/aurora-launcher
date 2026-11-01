@@ -3,6 +3,7 @@ use crate::{
 };
 use serde::Serialize;
 use serde_json::Value;
+use tauri::Emitter;
 use sha1::{Digest as Sha1Digest, Sha1};
 use std::{
     fs,
@@ -15,6 +16,99 @@ pub struct LoaderInstallResult {
     pub version_id: String,
     pub installer: String,
     pub log: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LoaderProgress {
+    pub stage: String,
+    pub filename: String,
+    pub downloaded: u64,
+    pub total: u64,
+}
+
+fn emit_loader_progress(
+    app: &tauri::AppHandle,
+    stage: &str,
+    filename: &str,
+    downloaded: u64,
+    total: u64,
+) {
+    let _ = app.emit(
+        "loader-progress",
+        LoaderProgress {
+            stage: stage.to_string(),
+            filename: filename.to_string(),
+            downloaded,
+            total,
+        },
+    );
+}
+
+/// `download_to` with `loader-progress` events every 256 KiB; the largest
+/// candidate response's content-length is used as the total.
+async fn download_to_progressing(
+    app: &tauri::AppHandle,
+    client: &reqwest::Client,
+    urls: &[String],
+    target: &Path,
+    sha1: Option<&str>,
+    size: u64,
+    stage: &str,
+    filename: &str,
+) -> Result<(), String> {
+    if target.exists() {
+        if size == 0 {
+            return Ok(());
+        }
+        if let Ok(meta) = fs::metadata(target) {
+            if meta.len() == size {
+                return Ok(());
+            }
+        }
+    }
+    let mut response = None;
+    let mut last = String::new();
+    for url in urls {
+        match client.get(url).send().await {
+            Ok(item) if item.status().is_success() => {
+                response = Some(item);
+                break;
+            }
+            Ok(item) => last = format!("{url}: HTTP {}", item.status().as_u16()),
+            Err(error) => last = format!("{url}: {error}"),
+        }
+    }
+    let response = response.ok_or_else(|| format!("下载失败：{last}"))?;
+    let total = response.content_length().unwrap_or(size);
+    let mut bytes: Vec<u8> = Vec::with_capacity(total.min(64 * 1024 * 1024) as usize);
+    let mut last_emit = 0u64;
+    let mut response = response;
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                bytes.extend_from_slice(&chunk);
+                if bytes.len() as u64 - last_emit >= 262_144 {
+                    last_emit = bytes.len() as u64;
+                    emit_loader_progress(app, stage, filename, last_emit, total);
+                }
+            }
+            Ok(None) => break,
+            Err(error) => return Err(format!("读取下载内容失败：{error}")),
+        }
+    }
+    emit_loader_progress(app, stage, filename, bytes.len() as u64, total);
+    if size > 0 && bytes.len() as u64 != size {
+        return Err("文件大小校验失败".into());
+    }
+    if let Some(expected) = sha1 {
+        if hex::encode(Sha1::digest(&bytes)) != expected.to_lowercase() {
+            return Err("SHA-1 校验失败".into());
+        }
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    write_atomic(target, &bytes)
 }
 
 async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
@@ -45,64 +139,8 @@ pub(crate) async fn fetch_first(client: &reqwest::Client, urls: &[String]) -> Re
     })
 }
 
-async fn download_to(
-    client: &reqwest::Client,
-    urls: &[String],
-    target: &Path,
-    sha1: Option<&str>,
-    size: u64,
-) -> Result<(), String> {
-    if target.exists() {
-        if size == 0 {
-            return Ok(());
-        }
-        if let Ok(meta) = fs::metadata(target) {
-            if meta.len() == size {
-                return Ok(());
-            }
-        }
-    }
-    let mut last = String::new();
-    for url in urls {
-        let response = client.get(url).send().await;
-        let response = match response {
-            Ok(response) => response,
-            Err(error) => {
-                last = format!("{url}: {error}");
-                continue;
-            }
-        };
-        if !response.status().is_success() {
-            last = format!("{url}: HTTP {}", response.status().as_u16());
-            continue;
-        }
-        let bytes = match response.bytes().await {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                last = format!("{url}: {error}");
-                continue;
-            }
-        };
-        if size > 0 && bytes.len() as u64 != size {
-            last = format!("{url}: 文件大小校验失败");
-            continue;
-        }
-        if let Some(expected) = sha1 {
-            if hex::encode(Sha1::digest(&bytes)) != expected.to_lowercase() {
-                last = format!("{url}: SHA-1 校验失败");
-                continue;
-            }
-        }
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        write_atomic(target, &bytes)?;
-        return Ok(());
-    }
-    Err(format!("下载失败：{last}"))
-}
-
 async fn ensure_vanilla(
+    app: &tauri::AppHandle,
     client: &reqwest::Client,
     game_dir: &Path,
     version: &str,
@@ -157,12 +195,15 @@ async fn ensure_vanilla(
             .get("size")
             .and_then(|value| value.as_u64())
             .unwrap_or(0);
-        download_to(
+        download_to_progressing(
+            app,
             client,
             &crate::launch::candidates(url, source, version),
             &jar_path,
             sha1,
             size,
+            "下载 MC 本体",
+            &format!("{version}.jar"),
         )
         .await?;
     }
@@ -354,7 +395,7 @@ pub async fn install(
     let client = http_client(&app)?;
     let source = crate::launch::resolve_download_source(&client, &crate::read_settings(&app).download_source)
         .await;
-    ensure_vanilla(&client, &game_dir, &minecraft, &source).await?;
+    ensure_vanilla(&app, &client, &game_dir, &minecraft, &source).await?;
     let url = installer_url(&client, &loader, &minecraft, &version).await?;
     if !allowed_installer_url(&url) {
         return Err("安装器来源不在官方白名单内".into());
@@ -371,9 +412,20 @@ pub async fn install(
         .unwrap_or_else(|| format!("{loader}-installer.jar"));
     let installer = PathBuf::from(&instance.directory)
         .join("downloads")
-        .join(file_name);
+        .join(&file_name);
     let installer_urls = crate::launch::candidates(&url, &source, &minecraft);
-    download_to(&client, &installer_urls, &installer, None, 0).await?;
+    download_to_progressing(
+        &app,
+        &client,
+        &installer_urls,
+        &installer,
+        None,
+        0,
+        "下载安装器",
+        &file_name,
+    )
+    .await?;
+    emit_loader_progress(&app, "校验安装器", &file_name, 1, 1);
 
     let java = crate::launch::find_java(instance.java_path.as_deref(), 8)?;
     let build_command = |attempt: u32| {
@@ -418,6 +470,13 @@ pub async fn install(
     let output = {
         let mut output = None;
         for attempt in 1..=3 {
+            emit_loader_progress(
+                &app,
+                "运行安装器",
+                &file_name,
+                attempt as u64,
+                3,
+            );
             let mut command = build_command(attempt);
             let result = tauri::async_runtime::spawn_blocking(move || command.output())
                 .await
@@ -439,12 +498,21 @@ pub async fn install(
                 let failed = failed_libraries_from_log(&log);
                 if !failed.is_empty() {
                     let source_hint = source.as_str();
+                    let total = failed.len() as u64;
+                    for (index, name) in failed.iter().enumerate() {
+                        emit_loader_progress(
+                            &app,
+                            "预下载缺失库",
+                            name,
+                            index as u64,
+                            total,
+                        );
+                    }
                     let lines = predownload_failed_libraries(
                         &client,
                         &game_dir,
                         &failed,
                         source_hint,
-                        &minecraft,
                     )
                     .await;
                     combined_log.push_str(&lines);
@@ -502,7 +570,7 @@ async fn install_optifine(
     let minecraft = instance.minecraft_version.clone();
     let client = http_client(&app)?;
     let source = crate::launch::resolve_download_source(&client, &crate::read_settings(&app).download_source).await;
-    ensure_vanilla(&client, &game_dir, &minecraft, &source).await?;
+    ensure_vanilla(&app, &client, &game_dir, &minecraft, &source).await?;
 
     let name = if version.trim().is_empty() {
         let html = client
@@ -543,7 +611,36 @@ async fn install_optifine(
             response.status().as_u16()
         ));
     }
-    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    let total = response.content_length().unwrap_or(0);
+    let mut bytes: Vec<u8> = Vec::with_capacity(total.min(64 * 1024 * 1024) as usize);
+    let mut last_emit = 0u64;
+    let mut response = response;
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                bytes.extend_from_slice(&chunk);
+                if bytes.len() as u64 - last_emit >= 262_144 {
+                    last_emit = bytes.len() as u64;
+                    emit_loader_progress(
+                        &app,
+                        "下载 OptiFine 安装器",
+                        &format!("{name}.jar"),
+                        last_emit,
+                        total,
+                    );
+                }
+            }
+            Ok(None) => break,
+            Err(error) => return Err(format!("读取 OptiFine 下载内容失败：{error}")),
+        }
+    }
+    emit_loader_progress(
+        &app,
+        "下载 OptiFine 安装器",
+        &format!("{name}.jar"),
+        bytes.len() as u64,
+        total,
+    );
     if bytes.len() > OPTIFINE_MAX_BYTES {
         return Err("OptiFine 安装器体积异常".into());
     }
@@ -657,7 +754,7 @@ async fn install_liteloader(
     let minecraft = instance.minecraft_version.clone();
     let client = http_client(&app)?;
     let source = crate::launch::resolve_download_source(&client, &crate::read_settings(&app).download_source).await;
-    ensure_vanilla(&client, &game_dir, &minecraft, &source).await?;
+    ensure_vanilla(&app, &client, &game_dir, &minecraft, &source).await?;
 
     let meta: Value = client
         .get(LITELOADER_META)
@@ -1068,7 +1165,6 @@ async fn predownload_failed_libraries(
     game_dir: &Path,
     libs: &[String],
     source: &str,
-    version_id: &str,
 ) -> String {
     let mut report = String::new();
     for name in libs {

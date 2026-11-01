@@ -376,60 +376,91 @@ pub async fn install(
     download_to(&client, &installer_urls, &installer, None, 0).await?;
 
     let java = crate::launch::find_java(instance.java_path.as_deref(), 8)?;
-    let mut command = Command::new(&java);
-    command.current_dir(&game_dir);
-    crate::hide_console(&mut command);
-    match loader.as_str() {
-        "fabric" | "legacyfabric" => {
-            command
-                .arg("-jar")
-                .arg(&installer)
-                .arg("client")
-                .arg("-dir")
-                .arg(&game_dir)
-                .arg("-mcversion")
-                .arg(&minecraft)
-                .arg("-loader")
-                .arg(&version);
+    let build_command = |attempt: u32| {
+        let mut command = Command::new(&java);
+        command.current_dir(&game_dir);
+        crate::hide_console(&mut command);
+        match loader.as_str() {
+            "fabric" | "legacyfabric" => {
+                command
+                    .arg("-jar")
+                    .arg(&installer)
+                    .arg("client")
+                    .arg("-dir")
+                    .arg(&game_dir)
+                    .arg("-mcversion")
+                    .arg(&minecraft)
+                    .arg("-loader")
+                    .arg(&version);
+            }
+            "forge" | "neoforge" => {
+                command
+                    .arg("-jar")
+                    .arg(&installer)
+                    .arg("--installClient")
+                    .arg(&game_dir);
+            }
+            "cleanroom" => {
+                command
+                    .arg("-jar")
+                    .arg(&installer)
+                    .arg("--directory")
+                    .arg(&game_dir)
+                    .arg("--yes")
+                    .arg("--no-gui");
+            }
+            _ => {}
         }
-        "forge" | "neoforge" => {
-            command
-                .arg("-jar")
-                .arg(&installer)
-                .arg("--installClient")
-                .arg(&game_dir);
+        let _ = attempt;
+        command
+    };
+    let mut combined_log = String::new();
+    let output = {
+        let mut output = None;
+        for attempt in 1..=3 {
+            let mut command = build_command(attempt);
+            let result = tauri::async_runtime::spawn_blocking(move || command.output())
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| format!("安装器启动失败：{e}"))?;
+            let log = format!(
+                "{}{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            combined_log.push_str(&format!("--- 第 {attempt} 次尝试 ---
+{log}
+"));
+            if result.status.success() {
+                output = Some(result);
+                break;
+            }
+            if attempt < 3 {
+                let failed = failed_libraries_from_log(&log);
+                if !failed.is_empty() {
+                    let source_hint = source.as_str();
+                    let lines = predownload_failed_libraries(
+                        &client,
+                        &game_dir,
+                        &failed,
+                        source_hint,
+                        &minecraft,
+                    )
+                    .await;
+                    combined_log.push_str(&lines);
+                }
+            } else {
+                output = Some(result);
+            }
         }
-        "cleanroom" => {
-            command
-                .arg("-jar")
-                .arg(&installer)
-                .arg("--directory")
-                .arg(&game_dir)
-                .arg("--yes")
-                .arg("--no-gui");
-        }
-        _ => {}
-    }
-    let output = tauri::async_runtime::spawn_blocking(move || command.output())
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| format!("安装器启动失败：{e}"))?;
-    let log = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+        output.ok_or_else(|| "安装器未产生输出".to_string())?
+    };
+    let log = combined_log.clone();
     if !output.status.success() {
         return Err(format!(
-            "安装器退出码 {}，日志：{}",
+            "安装器退出码 {}（已自动重试 3 次），日志：{}",
             output.status.code().unwrap_or(-1),
-            log.chars()
-                .rev()
-                .take(2000)
-                .collect::<String>()
-                .chars()
-                .rev()
-                .collect::<String>()
+            tail_log(&log, 3000)
         ));
     }
     let version_id = find_installed_version(&game_dir, &loader, &version)
@@ -970,6 +1001,132 @@ fn update_instance_loader(
     write_instances(app, &all)
 }
 
+/// Parse the `These libraries failed to download` section the Forge/NeoForge
+/// installer prints on failure; returns `group:artifact:version[:classifier]`
+/// coordinates.
+fn failed_libraries_from_log(log: &str) -> Vec<String> {
+    let Some(position) = log.find("These libraries failed to download") else {
+        return Vec::new();
+    };
+    let tail = &log[position..];
+    let mut libs = Vec::new();
+    for line in tail.lines().skip(1) {
+        let line = line.trim();
+        if line.is_empty() || line.contains("There was an error") {
+            continue;
+        }
+        let parts: Vec<&str> = line.split(':').collect();
+        if !matches!(parts.len(), 3 | 4) {
+            continue;
+        }
+        if parts.iter().any(|part| {
+            part.is_empty()
+                || !part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        }) {
+            continue;
+        }
+        if !libs.iter().any(|existing| existing == line) {
+            libs.push(line.to_string());
+        }
+    }
+    libs
+}
+
+/// Maven repo path for a coordinate, tolerating an optional classifier.
+fn maven_relative_full(name: &str) -> Option<String> {
+    let parts: Vec<&str> = name.split(':').collect();
+    match parts.as_slice() {
+        [group, artifact, version] => Some(format!(
+            "{}/{}/{}/{}-{}.jar",
+            group.replace('.', "/"),
+            artifact,
+            version,
+            artifact,
+            version
+        )),
+        [group, artifact, version, classifier] => Some(format!(
+            "{}/{}/{}/{}-{}-{}.jar",
+            group.replace('.', "/"),
+            artifact,
+            version,
+            artifact,
+            version,
+            classifier
+        )),
+        _ => None,
+    }
+}
+
+/// Pre-download libraries the installer could not fetch, from mirrors the
+/// installer itself does not know about (BMCLAPI, Sponge repo, Maven Central).
+/// The installer verifies checksums itself, so a wrong file is simply deleted
+/// by the next attempt.
+async fn predownload_failed_libraries(
+    client: &reqwest::Client,
+    game_dir: &Path,
+    libs: &[String],
+    source: &str,
+    version_id: &str,
+) -> String {
+    let mut report = String::new();
+    for name in libs {
+        let Some(relative) = maven_relative_full(name) else {
+            continue;
+        };
+        let target = game_dir.join("libraries").join(&relative);
+        if target.exists() {
+            report.push_str(&format!("预下载跳过（已存在）：{name}
+"));
+            continue;
+        }
+        let mut candidates: Vec<String> = vec![
+            format!("https://bmclapi2.bangbang93.com/maven/{relative}"),
+            format!("https://libraries.minecraft.net/{relative}"),
+        ];
+        if name.starts_with("org.spongepowered:") {
+            candidates.push(format!("https://repo.spongepowered.org/maven/{relative}"));
+        }
+        candidates.push(format!("https://repo1.maven.org/maven2/{relative}"));
+        if source == "bmclapi" || source == "auto" {
+            // keep mirror-first ordering above; official fallback last
+        } else {
+            candidates.reverse();
+        }
+        let mut downloaded = false;
+        for url in &candidates {
+            match fetch(client, url).await {
+                Ok(bytes) => {
+                    if bytes.len() < 4 || &bytes[..2] != b"PK" {
+                        report.push_str(&format!("预下载 {name}：{} 不是有效 JAR
+", url));
+                        continue;
+                    }
+                    if let Some(parent) = target.parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    if write_atomic(&target, &bytes).is_ok() {
+                        report.push_str(&format!("预下载 {} 成功（{}）
+", name, url));
+                        downloaded = true;
+                        break;
+                    }
+                }
+                Err(error) => {
+                    report.push_str(&format!("预下载 {name}：{url} → {error}
+"));
+                }
+            }
+        }
+        if !downloaded {
+            report.push_str(&format!("预下载 {name} 全部来源失败，交由安装器重试
+"));
+        }
+    }
+    report
+}
+
 fn tail_log(log: &str, limit: usize) -> String {
     log.chars().rev().take(limit).collect::<String>().chars().rev().collect()
 }
@@ -1072,6 +1229,46 @@ mod tests {
             library_repo_base("net.minecraft:launchwrapper:1.12", Some("http://ignored/")),
             "http://ignored"
         );
+    }
+
+    #[test]
+    fn failed_libraries_are_parsed_from_installer_log() {
+        let log = r#"Downloading library from https://maven.creeperhost.net/trove/trove/1.0.2/trove-1.0.2.jar
+Download failed: Checksum invalid, deleting file: Expected: 112b40 Actual: null
+These libraries failed to download. Try again.
+org.spongepowered:mixin:0.8.5
+There was an error during installation"#;
+        assert_eq!(
+            failed_libraries_from_log(log),
+            vec!["org.spongepowered:mixin:0.8.5".to_string()]
+        );
+        let multi = "These libraries failed to download. Try again.
+org.ow2.asm:asm:7.1
+net.minecraftforge:mergetool:1.1.9:fat
+";
+        assert_eq!(
+            failed_libraries_from_log(multi),
+            vec![
+                "org.ow2.asm:asm:7.1".to_string(),
+                "net.minecraftforge:mergetool:1.1.9:fat".to_string(),
+            ]
+        );
+        assert!(failed_libraries_from_log("all good").is_empty());
+        assert!(failed_libraries_from_log("These libraries failed to download. Try again.
+not a lib").is_empty());
+    }
+
+    #[test]
+    fn maven_paths_support_classifiers() {
+        assert_eq!(
+            maven_relative_full("org.spongepowered:mixin:0.8.5").as_deref(),
+            Some("org/spongepowered/mixin/0.8.5/mixin-0.8.5.jar")
+        );
+        assert_eq!(
+            maven_relative_full("net.minecraftforge:mergetool:1.1.9:fat").as_deref(),
+            Some("net/minecraftforge/mergetool/1.1.9/mergetool-1.1.9-fat.jar")
+        );
+        assert_eq!(maven_relative_full("bad"), None);
     }
 
     #[test]

@@ -1,6 +1,11 @@
 # Aurora Launcher
 
-Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录；0.4.5 增加 LittleSkin OAuth 授权登录并消除子进程控制台窗口；0.4.6 补上 LittleSkin 应用管理与白名单申请入口；0.4.7 让 OAuth 登录支持刷新令牌续期；0.4.8 内置已过审的微软 Client ID，开箱可正版登录；0.4.9 下载 MC 本体时即可选择加载器并自动安装（OptiFine / LiteLoader 也自动化）；0.4.10 下载源支持官方/镜像/自动探测最优，加载器安装全面走镜像。；0.5.0 模组下载显示实时进度，新增基于 EasyTier 的联机（对齐 PCL-CE）。
+Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19。0.3.0 完成了 PCL 风格资源中心；0.4.0 补上真正的游戏启动、加载器自动安装、微软/离线账户、整合包导入导出、镜像下载、签名与锁区网关模板；0.4.2 按 lmaml 教程对齐设备码流程细节；0.4.3 增加 Client ID 自检与 Mojang 应用审核指南；0.4.4 接入 LittleSkin（Yggdrasil + authlib-injector）登录；0.4.5 增加 LittleSkin OAuth 授权登录并消除子进程控制台窗口；0.4.6 补上 LittleSkin 应用管理与白名单申请入口；0.4.7 让 OAuth 登录支持刷新令牌续期；0.4.8 内置已过审的微软 Client ID，开箱可正版登录；0.4.9 下载 MC 本体时即可选择加载器并自动安装（OptiFine / LiteLoader 也自动化）；0.4.10 下载源支持官方/镜像/自动探测最优，加载器安装全面走镜像。；0.5.0 模组下载显示实时进度，新增基于 EasyTier 的联机（对齐 PCL-CE）。；0.5.1 加载器安装失败自动预下载缺失库并重试。
+
+## 0.5.1 更新内容
+
+- **加载器安装自动重试与缺库预下载**：Forge/NeoForge 安装器自带的下载链（优先 maven.creeperhost.net）偶发坏文件——实测 trove-1.0.2 与 mixin-0.8.5 校验失败被删后整个安装中止。现在安装器失败时自动解析“These libraries failed to download”清单，从 BMCLAPI / Sponge 仓库 / Maven Central 预下载缺失库到实例 libraries（安装器自身仍会做 SHA-1 校验），再自动重试，最多 3 次；每次尝试的日志都保留在结果里。
+- 坐标解析支持带 classifier 的库（如 `net.minecraftforge:mergetool:1.1.9:fat`），附单元测试（用真实故障日志做样例）。
 
 ## 0.5.0 更新内容
 
@@ -226,11 +231,12 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 12. OptiFine 下载依赖广告页 token（已带 UA/Referer 解析 `adloadx → downloadx`，token 过期会重试失败提示）、LabyMod 官网反爬无法直下（改为打开下载页）、LiteLoader 已停更且官方 md5 过期（按内容校验放行并记录日志）。
 13. 微软不存在可合法复用的第三方公共 Client ID：Aurora 现已内置自有 Azure 应用（2026-10-31 过 Mojang 审核），第三方启动器仍需自行注册。
 14. LiteLoader 自动安装未经真实进游戏验证：本机没有 Java 8（LiteLoader 仅支持 ≤1.12.2），下载、依赖解析与版本 JSON 构造均已按官方安装器产物校验。
+15. Forge 安装器优先走 maven.creeperhost.net，该镜像偶发坏文件（trove/mixin SHA-1 校验失败即删，安装中止）：已实现失败库解析 + BMCLAPI/Sponge/Maven Central 预下载 + 自动重试（最多 3 次）；瞬时损坏通常第二次尝试即成功。
 
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.5.0>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.5.1>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）
 
@@ -325,7 +331,7 @@ LittleSkin 是 Yggdrasil（authlib-injector）体系，和微软登录互不影�
 ## Cloudflare 锁区网关（qlmtest.dpdns.org）
 
 - 域名已托管在 Cloudflare（NS：fred/magali.ns.cloudflare.com），是独立 zone，不是 dpdns.org 的子记录。
-- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.5.0 Release 资产回源，`PATH_PREFIX=/aurora`。
+- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.5.1 Release 资产回源，`PATH_PREFIX=/aurora`。
 - 本地已验证：CN 请求 403，其他地区 200 且回源到正确的 Release 资产 URL。
 - **尚未部署**：需要 Cloudflare 凭据。你提供的 32 位 Key 是 Global API Key（需配邮箱、全账号权限，不推荐），建议在 Cloudflare 面板创建 Scoped Token（Workers Scripts:Edit、Zone Workers Routes:Edit、DNS:Edit、Zone:Read，范围限 qlmtest.dpdns.org），然后：
 

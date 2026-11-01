@@ -1,4 +1,9 @@
-# Aurora Launcher v0.5.0
+# Aurora Launcher v0.5.1
+
+- 加载器安装失败自动恢复：解析 Forge/NeoForge 安装器的失败库清单，从 BMCLAPI / Sponge 仓库 / Maven Central 预下载到实例 libraries，再自动重试安装器（最多 3 次），瞬时坏镜像（如 creeperhost 返回损坏的 trove/mixin）不再导致整个安装中止。
+- 坐标解析支持带 classifier 的库；每次尝试日志保留在安装结果里。
+
+# Aurora Launcher v0.5.0（历史）
 
 - 模组/材质/光影/整合包文件下载改为流式并显示实时进度（百分比 + 已下载/总大小），Modrinth 与 CurseForge 均支持。
 - 新增联机功能（EasyTier，对齐 PCL-CE 方案）：创建/加入房间、房间码 `网络名#密钥`、虚拟 IP 展示与联机日志；主机固定 10.144.144.1，客人 DHCP 自动取址（已实测分配 10.144.144.2/24）。

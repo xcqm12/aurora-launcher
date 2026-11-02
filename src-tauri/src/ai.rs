@@ -479,6 +479,7 @@ async fn chat_reply(app: &tauri::AppHandle, player: &str, instruction: &str) -> 
 const COMPANION_RELEASE: &str =
     "https://github.com/xcqm12/aurora-launcher/releases/download/v0.6.0/aurora-companion-1.0.0.jar";
 const COMPANION_MAX_BYTES: u64 = 4 * 1024 * 1024;
+const COMPANION_SHA256: &str = "415a9ebcc4288d5204fd66ac7361613b74f5243f43d3fc70180ff87c13fd461f";
 
 pub async fn install_companion(
     app: &tauri::AppHandle,
@@ -523,6 +524,10 @@ pub async fn install_companion(
     }
     if bytes.len() < 4 || &bytes[..2] != b"PK" {
         return Err("AI 伙伴模组不是有效的 JAR".into());
+    }
+    let actual = hex::encode(Sha256::digest(&bytes));
+    if actual != COMPANION_SHA256 {
+        return Err("AI 伙伴模组 SHA-256 校验失败，已中止".into());
     }
     let mods_dir = PathBuf::from(&instance.directory)
         .join("game")

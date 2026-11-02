@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "aurora-companion",
+  "version": "${version}",
+  "name": "Aurora Companion",
+  "description": "Aurora 启动器的游戏内 AI 伙伴：随你进入世界、观察你的操作、陪你聊天。",
+  "authors": [
+    "SevenZeroMeowTeam"
+  ],
+  "contact": {
+    "homepage": "https://mcdles.us.ci/",
+    "sources": "https://github.com/xcqm12/aurora-launcher"
+  },
+  "license": "MIT",
+  "icon": "assets/aurora-companion/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "me.aurora.companion.AuroraCompanionClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.20.0",
+    "fabric-api": "*",
+    "minecraft": "~1.21.1",
+    "java": ">=21"
+  }
+}

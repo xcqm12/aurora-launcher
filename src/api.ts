@@ -156,6 +156,21 @@ export type MpStatus = {
   peers_connected: number;
   log_tail: string[];
 };
+export type AiSettingsView = {
+  enabled: boolean;
+  base_url: string;
+  model: string;
+  key_set: boolean;
+  name: string;
+};
+export type AiSettingsInput = {
+  enabled: boolean;
+  base_url: string;
+  model: string;
+  key?: string;
+  name: string;
+};
+export type AiReply = { reply: string };
 export type LoaderProgressPayload = {
   stage: string;
   filename: string;
@@ -279,6 +294,12 @@ export const api = {
   yggdrasilSelect: (pendingId: string, profileId: string) =>
     invoke<AccountView>("yggdrasil_select", { pendingId, profileId }),
   littleskinOauthStart: () => invoke<LittleSkinOauthDevice>("littleskin_oauth_start"),
+  aiSettings: () => invoke<AiSettingsView>("ai_get_settings"),
+  aiSaveSettings: (settings: AiSettingsInput) =>
+    invoke<AiSettingsView>("ai_save_settings", { settings }),
+  aiTestChat: (message: string) => invoke<AiReply>("ai_test_chat", { message }),
+  aiInstallCompanion: (instanceId: string) =>
+    invoke<string>("ai_install_companion", { instanceId }),
   mpHost: () => invoke<MpStatus>("mp_host"),
   mpJoin: (code: string) => invoke<MpStatus>("mp_join", { code }),
   mpStop: () => invoke<MpStatus>("mp_stop"),

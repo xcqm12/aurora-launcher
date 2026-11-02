@@ -1,3 +1,4 @@
+mod ai;
 mod auth;
 mod launch;
 mod loaders;
@@ -72,6 +73,20 @@ pub(crate) struct AppSettings {
     pub(crate) data_dir: String,
     #[serde(default)]
     pub(crate) sakura_source: String,
+    #[serde(default = "default_true")]
+    pub(crate) ai_enabled: bool,
+    #[serde(default)]
+    pub(crate) ai_base_url: String,
+    #[serde(default)]
+    pub(crate) ai_model: String,
+    #[serde(default)]
+    pub(crate) ai_key: String,
+    #[serde(default)]
+    pub(crate) ai_name: String,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -86,6 +101,11 @@ impl Default for AppSettings {
             instances_dir: String::new(),
             data_dir: String::new(),
             sakura_source: String::new(),
+            ai_enabled: true,
+            ai_base_url: String::new(),
+            ai_model: String::new(),
+            ai_key: String::new(),
+            ai_name: String::new(),
             active_account: String::new(),
         }
     }
@@ -1452,7 +1472,10 @@ struct ProxyTest {
 
 #[tauri::command]
 fn get_settings(app: tauri::AppHandle) -> AppSettings {
-    read_settings(&app)
+    let mut settings = read_settings(&app);
+    // ai_key 的加密串不提供给前端；AI 卡片走 ai_get_settings。
+    settings.ai_key = String::new();
+    settings
 }
 
 fn migrate_data_file(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -1508,6 +1531,11 @@ fn save_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), Str
         instances_dir: settings.instances_dir.trim().to_string(),
         data_dir: settings.data_dir.trim().to_string(),
         sakura_source: settings.sakura_source.trim().to_string(),
+        ai_enabled: settings.ai_enabled,
+        ai_base_url: settings.ai_base_url.trim().trim_end_matches('/').to_string(),
+        ai_model: settings.ai_model.trim().to_string(),
+        ai_key: settings.ai_key,
+        ai_name: settings.ai_name.trim().to_string(),
     };
     // 先把带新 data_dir 指针的引导配置写回默认位置，使 data_dir() 立即
     // 指向新目录；然后把旧目录里的数据复制过去（保留原件作备份）。
@@ -2551,6 +2579,21 @@ async fn launch_instance(
         .ok_or_else(|| "实例不存在".to_string())?;
     let settings = read_settings(&app);
     let account = auth::launch_account(&app).await?;
+    let mut ai_args: Vec<String> = Vec::new();
+    if settings.ai_enabled {
+        match ai::ensure_server(&app, &account.name) {
+            Ok(args) => ai_args = args,
+            Err(error) => {
+                let _ = app.emit(
+                    "game-log",
+                    GameLogPayload {
+                        instance_id: instance_id.clone(),
+                        line: format!("[AI] 伙伴服务启动失败：{error}"),
+                    },
+                );
+            }
+        }
+    }
     let instance_dir = PathBuf::from(&instance.directory);
     let game_dir = instance_dir.join("game");
     let shared_root = if settings.shared_game_dir.trim().is_empty() {
@@ -2587,6 +2630,7 @@ async fn launch_instance(
         client_id: account.client_id,
         xuid: account.xuid,
         authlib: account.authlib,
+        ai_args,
         download_source: settings.download_source,
         proxy: settings.proxy,
     };
@@ -2769,6 +2813,35 @@ async fn ms_check_client_id(
 }
 
 #[tauri::command]
+fn ai_get_settings(app: tauri::AppHandle) -> Result<ai::AiSettingsView, String> {
+    Ok(ai::get_settings_view(&app))
+}
+
+#[tauri::command]
+async fn ai_save_settings(
+    app: tauri::AppHandle,
+    settings: ai::AiSettingsInput,
+) -> Result<ai::AiSettingsView, String> {
+    ai::save_settings(&app, settings)
+}
+
+#[tauri::command]
+async fn ai_test_chat(
+    app: tauri::AppHandle,
+    message: String,
+) -> Result<ai::AiReply, String> {
+    ai::test_chat(&app, &message).await
+}
+
+#[tauri::command]
+async fn ai_install_companion(
+    app: tauri::AppHandle,
+    instance_id: String,
+) -> Result<String, String> {
+    ai::install_companion(&app, &instance_id).await
+}
+
+#[tauri::command]
 async fn mp_host(
     app: tauri::AppHandle,
     state: tauri::State<'_, multiplayer::MultiplayerState>,
@@ -2862,6 +2935,7 @@ pub fn smoke_launch(
         client_id: String::new(),
         xuid: String::new(),
         authlib: None,
+        ai_args: Vec::new(),
         download_source: "official".into(),
         proxy: String::new(),
     };
@@ -3050,6 +3124,10 @@ pub fn run() {
             ms_check_client_id,
             mp_host,
             mp_join,
+            ai_get_settings,
+            ai_save_settings,
+            ai_test_chat,
+            ai_install_companion,
             mp_stop,
             mp_status,
             yggdrasil_login,

@@ -2,6 +2,13 @@
 
 Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游戏启动与加载器自动安装、微软正版/LittleSkin/离线登录、整合包导入导出、镜像加速、EasyTier 联机。历史版本更新记录见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
+## 0.6.0 更新内容
+
+- **AI 伙伴（实验）**：新增游戏内 AI 伙伴。安装 Companion 模组后，伙伴随玩家自动进入世界：单机模式出现跟随实体（小七），玩家操作（挖方块、聊天、受伤、死亡、换维度）会进入它的记忆，`#ai 问题` 随时对话，它也会主动吐槽；启动器设置页可配置 OpenAI 兼容接口（默认 DeepSeek）、模型、Key 与伙伴名字，并支持对话测试。
+- **架构与安全**：模组 → 启动器本地回环服务（127.0.0.1 + 令牌鉴权）→ AI 接口，**API Key 只在 Rust 侧使用并 DPAPI 加密落盘**，不进模组配置、不进日志；启动时通过 JVM 属性注入端口/令牌/玩家名。
+- 诚实边界：「自我意识」是伙伴的人格设定而非真实意识；伙伴**不会替玩家操作游戏**（多人服有反作弊与封号风险），实体跟随仅单机可用。AI 伙伴需要自行在设置里填入接口 Key（默认关闭直到配置完成）。
+- 实例页一键安装 Companion 模组（Fabric 1.21.x，从 v0.6.0 Release 下载 aurora-companion-1.0.0.jar）；模组源码在 `mod/companion/`。
+
 ## 0.5.4 更新内容
 
 - **数据目录也可自定义**：设置 → 下载与目录 → “数据目录”，可浏览选择任意磁盘位置（账户、实例索引、EasyTier/注入器缓存等的根目录）。修改保存后自动把现有数据复制到新位置（原件保留作备份），引导配置 settings.json 固定留在默认位置用于定位，二者关系与迁移行为已在界面说明。实例存储目录继续作为新实例位置的进一步覆盖。
@@ -147,7 +154,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.5.4>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.6.0>
 - 分发下载页：<http://mcdles.us.ci/>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）
@@ -243,7 +250,7 @@ LittleSkin 是 Yggdrasil（authlib-injector）体系，和微软登录互不影�
 ## Cloudflare 锁区网关（qlmtest.dpdns.org）
 
 - 域名已托管在 Cloudflare（NS：fred/magali.ns.cloudflare.com），是独立 zone，不是 dpdns.org 的子记录。
-- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.5.4 Release 资产回源，`PATH_PREFIX=/aurora`。
+- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.6.0 Release 资产回源，`PATH_PREFIX=/aurora`。
 - 本地已验证：CN 请求 403，其他地区 200 且回源到正确的 Release 资产 URL。
 - **尚未部署**：需要 Cloudflare 凭据。你提供的 32 位 Key 是 Global API Key（需配邮箱、全账号权限，不推荐），建议在 Cloudflare 面板创建 Scoped Token（Workers Scripts:Edit、Zone Workers Routes:Edit、DNS:Edit、Zone:Read，范围限 qlmtest.dpdns.org），然后：
 

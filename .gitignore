@@ -25,3 +25,8 @@ Thumbs.db
 
 # Local agent workspace
 .zcode/
+
+# Companion mod build output
+mod/companion/.gradle/
+mod/companion/build/
+mod/companion/run/

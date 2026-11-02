@@ -33,6 +33,7 @@ pub struct LaunchContext {
     pub client_id: String,
     pub xuid: String,
     pub authlib: Option<crate::yggdrasil::LaunchAuthlib>,
+    pub ai_args: Vec<String>,
     pub download_source: String,
     pub proxy: String,
 }
@@ -1138,6 +1139,7 @@ pub async fn prepare(
         args.push(classpath.clone());
     }
     args.extend(authlib_args(ctx.authlib.as_ref()));
+    args.extend(ctx.ai_args.iter().cloned());
     if !args
         .iter()
         .any(|arg| arg.starts_with("-Djava.library.path="))

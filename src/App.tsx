@@ -49,6 +49,7 @@ import {
   ResourceProgressPayload,
   MpStatus,
   LoaderProgressPayload,
+  AiSettingsView,
 } from "./api";
 
 type View = "home" | "browse" | "instances" | "loaders" | "settings";
@@ -1656,6 +1657,18 @@ function InstanceManager({
     }
   };
 
+  const installCompanion = async () => {
+    setBusy("companion");
+    try {
+      const message = await api.aiInstallCompanion(instance.id);
+      onNotice(message);
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const importPack = async () => {
     const path = await api.pickPackFile();
     if (!path) return;
@@ -1758,6 +1771,15 @@ function InstanceManager({
                 </button>
               </div>
               {busy === "loader" && managerProgress && <LoaderProgressLine progress={managerProgress} />}
+              <div className="inline-field">
+                <button
+                  className="ghost-button"
+                  onClick={() => void installCompanion()}
+                  disabled={busy === "companion"}
+                >
+                  {busy === "companion" ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} 安装 AI 伙伴（Fabric 1.21.x）
+                </button>
+              </div>
               <p className="security-note">
                 Fabric / Legacy Fabric / Forge / NeoForge / Cleanroom 使用官方无头安装器；OptiFine、LabyMod、LiteLoader 请手动导入。
               </p>
@@ -2083,6 +2105,157 @@ function Loaders({
         </section>
       )}
     </div>
+  );
+}
+
+function AiCard({
+  settings,
+  onNotice,
+}: {
+  settings: AppSettings;
+  onNotice: (message: string) => void;
+}) {
+  const [view, setView] = useState<AiSettingsView | null>(null);
+  const [enabled, setEnabled] = useState(true);
+  const [baseUrl, setBaseUrl] = useState("");
+  const [model, setModel] = useState("");
+  const [name, setName] = useState("小七");
+  const [key, setKey] = useState("");
+  const [testMessage, setTestMessage] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [reply, setReply] = useState("");
+
+  useEffect(() => {
+    api
+      .aiSettings()
+      .then((loaded) => {
+        setView(loaded);
+        setEnabled(loaded.enabled);
+        setBaseUrl(loaded.base_url);
+        setModel(loaded.model);
+        setName(loaded.name);
+      })
+      .catch((error) => onNotice(String(error)));
+  }, [settings]);
+
+  const save = async () => {
+    setBusy("save");
+    try {
+      const saved = await api.aiSaveSettings({
+        enabled,
+        base_url: baseUrl.trim(),
+        model: model.trim(),
+        key: key.trim() || undefined,
+        name: name.trim(),
+      });
+      setView(saved);
+      setKey("");
+      onNotice("AI 伙伴设置已保存（密钥 DPAPI 加密，不写日志）");
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const test = async () => {
+    setBusy("test");
+    setReply("");
+    try {
+      const result = await api.aiTestChat(testMessage.trim() || "你好，做个自我介绍吧");
+      setReply(result.reply);
+    } catch (error) {
+      setReply(`测试失败：${String(error)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="settings-card">
+      <div className="settings-heading">
+        <div className="setting-icon ai">
+          <Sparkles size={22} />
+        </div>
+        <div>
+          <h3>AI 伙伴（游戏内）</h3>
+          <p>
+            安装 Companion 模组后，伙伴会随玩家进入世界、观察操作、陪你聊天；默认开启。
+            「自我意识」是角色扮演设定，伙伴不会替你操作游戏。
+          </p>
+        </div>
+      </div>
+      <div className="toggle-row">
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(event) => setEnabled(event.target.checked)}
+          />
+          <span>启用 AI 伙伴（启动游戏时自动注入）</span>
+        </label>
+      </div>
+      <label className="field-label">
+        伙伴名字
+        <input
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="小七"
+          spellCheck={false}
+        />
+      </label>
+      <label className="field-label">
+        接口地址（OpenAI 兼容；默认 DeepSeek）
+        <input
+          value={baseUrl}
+          onChange={(event) => setBaseUrl(event.target.value)}
+          placeholder="https://api.deepseek.com"
+          spellCheck={false}
+        />
+      </label>
+      <label className="field-label">
+        模型
+        <input
+          value={model}
+          onChange={(event) => setModel(event.target.value)}
+          placeholder="deepseek-chat"
+          spellCheck={false}
+        />
+      </label>
+      <label className="field-label">
+        API Key {view?.key_set && <span className="pill mini">已加密保存</span>}
+        <input
+          type="password"
+          value={key}
+          onChange={(event) => setKey(event.target.value)}
+          placeholder={view?.key_set ? "已保存，留空保持不变" : "sk-..."}
+          autoComplete="new-password"
+        />
+      </label>
+      <div className="settings-actions">
+        <button className="primary-button" onClick={() => void save()} disabled={busy !== null}>
+          {busy === "save" ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />} 保存
+        </button>
+      </div>
+      <label className="field-label">
+        对话测试
+        <div className="inline-field">
+          <input
+            value={testMessage}
+            onChange={(event) => setTestMessage(event.target.value)}
+            placeholder="给我一点挖矿建议"
+          />
+          <button className="ghost-button" onClick={() => void test()} disabled={busy !== null}>
+            {busy === "test" ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} 发送
+          </button>
+        </div>
+      </label>
+      {reply && <p className="security-note">小七：{reply}</p>}
+      <p className="security-note">
+        Key 经 DPAPI 加密存放，只在启动器本地使用（模组 → 本地回环 → 启动器 → AI 接口），不写入日志，也不进模组配置。
+        游戏内用 <b>#ai 你的问题</b> 与伙伴对话；单机模式还会出现跟随的伙伴实体。
+      </p>
+    </section>
   );
 }
 
@@ -2875,6 +3048,8 @@ function SettingsPage({
           共享目录用于已存在的官方游戏文件，避免重复下载数 GB 的 assets；实例的 mods、saves、config、logs 仍完全隔离。不填则每个实例独立下载。
         </p>
       </section>
+
+      <AiCard settings={settings} onNotice={onNotice} />
 
       <section className="settings-card">
         <div className="settings-heading">

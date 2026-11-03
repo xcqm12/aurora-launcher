@@ -1,5 +1,6 @@
 mod ai;
 mod auth;
+mod content;
 mod launch;
 mod loaders;
 mod multiplayer;
@@ -2772,6 +2773,21 @@ fn pick_java_file() -> Option<String> {
 }
 
 #[tauri::command]
+fn pick_content_file(kind: String) -> Option<String> {
+    let (title, extensions): (&str, &[&str]) = match kind.as_str() {
+        "shader" => ("光影包", &["zip"]),
+        "resourcepack" => ("资源包", &["zip"]),
+        "schematic" => ("投影原理图", &["litematic", "schem", "schematic", "nbt"]),
+        _ => return None,
+    };
+    rfd::FileDialog::new()
+        .set_title(title)
+        .add_filter(title, extensions)
+        .pick_file()
+        .map(|path| path.display().to_string())
+}
+
+#[tauri::command]
 fn list_accounts(app: tauri::AppHandle) -> Vec<auth::AccountView> {
     auth::list(&app)
 }
@@ -3133,8 +3149,21 @@ pub fn run() {
             yggdrasil_login,
             yggdrasil_select,
             littleskin_oauth_start,
-            littleskin_oauth_poll
-        ])
-        .run(tauri::generate_context!())
+            littleskin_oauth_poll,
+            content::instance_content_summary,
+            content::instance_content_list,
+            content::instance_content_delete,
+            content::instance_content_open_folder,
+            content::instance_content_upload,
+            content::instance_mod_toggle,
+            content::instance_image_preview,
+            content::instance_save_open,
+            content::instance_server_list,
+            content::instance_server_set,
+            content::instance_config_list,
+            content::instance_config_read,
+            content::instance_config_write,
+            pick_content_file
+        ])        .run(tauri::generate_context!())
         .expect("error while running Aurora Launcher");
 }

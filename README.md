@@ -35,6 +35,7 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游
 - Modrinth / CurseForge 资源搜索与校验安装（流式下载 + 实时进度）；CurseForge 密钥 DPAPI 保存，不进入日志和前端。
 - EasyTier 联机：创建/加入房间、房间码、虚拟 IP 展示、日志面板（实验功能，见“联机”章节）。
 - LittleSkin（Yggdrasil + authlib-injector）登录：账户/密码验证、令牌刷新、多角色选择、启动注入与注入器校验下载。
+- 实例内容管理：实例管理弹窗分页查看 mods（可禁用/启用 .jar）、shaderpacks、resourcepacks、saves（解析 level.dat 显示世界名与最后游玩时间）、screenshots（缩略图与预览）、schematics（投影原理图，支持导入）；直接编辑 servers.dat 服务器列表与 options.txt / config/ 文本配置，改动前自动备份（servers.dat.aurora-bak-*、*.aurora-bak-*）。
 
 ## 尚未实现 / 限制
 

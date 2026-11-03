@@ -9,21 +9,27 @@ import {
   Database,
   Download,
   ExternalLink,
+  Eye,
+  EyeOff,
   Feather,
+  FileText,
   Flame,
   FolderOpen,
   Gamepad2,
   Globe2,
   Heart,
   History,
+  Image as ImageIcon,
   Layers3,
   LoaderCircle,
+  Map as MapIcon,
   Monitor,
   PackageOpen,
   Play,
   Plus,
   RefreshCw,
   Search,
+  Server as ServerIcon,
   Settings2,
   ShieldCheck,
   Sparkles,
@@ -37,12 +43,18 @@ import {
   AppInfo,
   DeviceCode,
   AppSettings,
+  ConfigEntry,
+  ContentItem,
+  ContentKind,
+  ContentSummary,
   CurseForgeFile,
   DiscoverItem,
   Instance,
   LoaderCatalog,
   ResourceFile,
   ResourceVersion,
+  ServerEntry,
+  ServerInput,
   VersionManifest,
   YggdrasilProfile,
   LittleSkinOauthDevice,
@@ -1563,7 +1575,7 @@ function Instances({
                     {busy === instance.id ? <LoaderCircle className="spin" size={15} /> : <Play size={15} />}
                     启动游戏
                   </button>
-                  <button className="icon-button" title="实例设置" onClick={() => setManagerFor(instance)}>
+                  <button className="icon-button" title="实例管理" onClick={() => setManagerFor(instance)}>
                     <Settings2 size={16} />
                   </button>
                   <button className="icon-button" title="打开目录" onClick={() => void open(instance)}>
@@ -1596,6 +1608,63 @@ function Instances({
   );
 }
 
+type ManagerTab =
+  | "settings"
+  | "mod"
+  | "shader"
+  | "resourcepack"
+  | "save"
+  | "screenshot"
+  | "schematic"
+  | "server"
+  | "config";
+
+const managerTabs: { id: ManagerTab; label: string; icon: Icon }[] = [
+  { id: "settings", label: "设置", icon: Settings2 },
+  { id: "mod", label: "模组", icon: Boxes },
+  { id: "shader", label: "光影包", icon: Sparkles },
+  { id: "resourcepack", label: "资源包", icon: Layers3 },
+  { id: "save", label: "存档", icon: Globe2 },
+  { id: "screenshot", label: "截图", icon: ImageIcon },
+  { id: "schematic", label: "原理图", icon: MapIcon },
+  { id: "server", label: "服务器", icon: ServerIcon },
+  { id: "config", label: "配置", icon: FileText },
+];
+
+function summaryCount(summary: ContentSummary | null, tab: ManagerTab): number | null {
+  if (!summary) return null;
+  switch (tab) {
+    case "mod":
+      return summary.mod_count;
+    case "shader":
+      return summary.shader_count;
+    case "resourcepack":
+      return summary.resourcepack_count;
+    case "save":
+      return summary.save_count;
+    case "screenshot":
+      return summary.screenshot_count;
+    case "schematic":
+      return summary.schematic_count;
+    case "server":
+      return summary.server_count;
+    default:
+      return null;
+  }
+}
+
+function formatUnix(seconds: number | null | undefined): string {
+  if (!seconds) return "-";
+  return new Date(seconds * 1000).toLocaleString();
+}
+
+function formatSize(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${bytes} B`;
+}
+
 function InstanceManager({
   instance,
   onClose,
@@ -1609,6 +1678,8 @@ function InstanceManager({
   onNotice: (message: string) => void;
   onLaunch: () => void;
 }) {
+  const [tab, setTab] = useState<ManagerTab>("settings");
+  const [summary, setSummary] = useState<ContentSummary | null>(null);
   const [java, setJava] = useState(instance.java_path ?? "");
   const [memory, setMemory] = useState(instance.memory_mb);
   const [loaderVersion, setLoaderVersion] = useState(instance.loader_version ?? "");
@@ -1616,198 +1687,861 @@ function InstanceManager({
   const [busy, setBusy] = useState<string | null>(null);
   const managerProgress = useLoaderProgress(busy === "loader");
 
-  const save = async () => {
-    setBusy("save");
+  const reloadSummary = async () => {
     try {
-      await api.updateInstance({
-        id: instance.id,
-        javaPath: java.trim(),
-        memoryMb: memory,
-      });
-      await onRefresh();
-      onNotice("实例设置已保存");
+      setSummary(await api.contentSummary(instance.id));
+    } catch {
+      setSummary(null);
+    }
+  };
+
+  useEffect(() => {
+    void reloadSummary();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instance.id]);
+
+  const guard = async (key: string, action: () => Promise<void>) => {
+    setBusy(key);
+    try {
+      await action();
     } catch (error) {
       onNotice(String(error));
     } finally {
       setBusy(null);
     }
   };
+
+  const save = () =>
+    guard("save", async () => {
+      await api.updateInstance({ id: instance.id, javaPath: java.trim(), memoryMb: memory });
+      await onRefresh();
+      onNotice("实例设置已保存");
+    });
 
   const pickJava = async () => {
     const path = await api.pickJavaFile();
     if (path) setJava(path);
   };
 
-  const installLoader = async () => {
-    if (!loaderVersion.trim()) {
-      onNotice("请填写加载器版本");
-      return;
-    }
-    setBusy("loader");
-    setInstallLog("");
-    try {
+  const installLoader = () =>
+    guard("loader", async () => {
+      if (!loaderVersion.trim()) {
+        onNotice("请填写加载器版本");
+        return;
+      }
+      setInstallLog("");
       const result = await api.installLoader(instance.id, instance.loader, loaderVersion.trim());
       setInstallLog(result.log);
       await onRefresh();
       onNotice(`加载器安装完成：${result.version_id}`);
-    } catch (error) {
-      onNotice(String(error));
-    } finally {
-      setBusy(null);
-    }
-  };
+    });
 
-  const installCompanion = async () => {
-    setBusy("companion");
-    try {
+  const installCompanion = () =>
+    guard("companion", async () => {
       const message = await api.aiInstallCompanion(instance.id);
       onNotice(message);
-    } catch (error) {
-      onNotice(String(error));
-    } finally {
-      setBusy(null);
-    }
-  };
+    });
 
-  const importPack = async () => {
-    const path = await api.pickPackFile();
-    if (!path) return;
-    setBusy("pack");
-    try {
+  const importPack = () =>
+    guard("pack", async () => {
+      const path = await api.pickPackFile();
+      if (!path) return;
       const result = await api.importPack(instance.id, path);
       await onRefresh();
       onNotice(
         `已导入 ${result.name}：${result.files} 个文件、${result.overrides} 个覆盖文件` +
           (result.loader ? `；加载器 ${result.loader} ${result.loader_version ?? ""}` : ""),
       );
-    } catch (error) {
-      onNotice(String(error));
-    } finally {
-      setBusy(null);
-    }
-  };
+    });
 
-  const importWorld = async () => {
-    const path = await api.pickWorldFile();
-    if (!path) return;
-    setBusy("world");
-    try {
+  const importWorld = () =>
+    guard("world", async () => {
+      const path = await api.pickWorldFile();
+      if (!path) return;
       const target = await api.importWorld(instance.id, path);
       onNotice(`世界已导入：${target}`);
-    } catch (error) {
-      onNotice(String(error));
-    } finally {
-      setBusy(null);
-    }
-  };
+    });
 
-  const exportPack = async () => {
-    const path = await api.pickExportFile(instance.name);
-    if (!path) return;
-    setBusy("export");
-    try {
+  const exportPack = () =>
+    guard("export", async () => {
+      const path = await api.pickExportFile(instance.name);
+      if (!path) return;
       const result = await api.exportPack(instance.id, path);
       onNotice(`整合包已导出：${result}`);
-    } catch (error) {
-      onNotice(String(error));
-    } finally {
-      setBusy(null);
-    }
-  };
+    });
+
+  const tabs = managerTabs.map((item) => ({
+    ...item,
+    count: summaryCount(summary, item.id),
+  }));
 
   return (
-    <div className="modal-backdrop" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) onClose();
-    }}>
-      <div className="modal wide">
+    <div
+      className="modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="modal wide manager-modal">
         <div className="modal-top">
-          <span>{instance.name} · 实例设置</span>
+          <span>{instance.name} · 实例管理</span>
           <button className="icon-button" onClick={onClose}>
             <X size={17} />
           </button>
         </div>
-        <div className="form-stack">
-          <div className="two-columns">
-            <label className="field-label">
-              Java 路径
-              <div className="inline-field">
-                <input value={java} onChange={(event) => setJava(event.target.value)} placeholder="留空自动检测 Java 17/21" />
-                <button className="ghost-button" onClick={() => void pickJava()}>浏览</button>
-              </div>
-            </label>
-            <label className="field-label">
-              内存 (MB)
-              <input
-                type="number"
-                min={512}
-                max={32768}
-                value={memory}
-                onChange={(event) => setMemory(Number(event.target.value))}
-              />
-            </label>
-          </div>
-          <p className="security-note">
-            启动版本：{instance.launch_version_id ?? instance.minecraft_version} · 目录：{instance.directory}
-          </p>
-
-          <div className="settings-actions">
-            <button className="ghost-button" onClick={onLaunch}><Play size={15} /> 启动</button>
-            <button className="primary-button" onClick={() => void save()} disabled={busy === "save"}>
-              {busy === "save" ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />} 保存设置
+        <div className="manager-tabs">
+          {tabs.map((item) => (
+            <button
+              key={item.id}
+              className={`manager-tab ${tab === item.id ? "active" : ""}`}
+              onClick={() => setTab(item.id)}
+            >
+              <item.icon size={14} />
+              {item.label}
+              {item.count !== null && <span className="tab-count">{item.count}</span>}
             </button>
-          </div>
+          ))}
+        </div>
 
-          {instance.loader !== "vanilla" && (
-            <section className="manager-section">
-              <h4>加载器安装</h4>
-              <div className="inline-field">
+        {tab === "settings" && (
+          <div className="form-stack manager-scroll">
+            <div className="two-columns">
+              <label className="field-label">
+                Java 路径
+                <div className="inline-field">
+                  <input
+                    value={java}
+                    onChange={(event) => setJava(event.target.value)}
+                    placeholder="留空自动检测 Java 17/21"
+                  />
+                  <button className="ghost-button" onClick={() => void pickJava()}>
+                    浏览
+                  </button>
+                </div>
+              </label>
+              <label className="field-label">
+                内存 (MB)
                 <input
-                  value={loaderVersion}
-                  onChange={(event) => setLoaderVersion(event.target.value)}
-                  placeholder={`${loaderLabel(instance.loader)} 版本，例如 0.16.0 / 47.4.0`}
+                  type="number"
+                  min={512}
+                  max={32768}
+                  value={memory}
+                  onChange={(event) => setMemory(Number(event.target.value))}
                 />
-                <button className="ghost-button" onClick={() => void installLoader()} disabled={busy === "loader"}>
-                  {busy === "loader" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} 自动安装
+              </label>
+            </div>
+            <p className="security-note">
+              启动版本：{instance.launch_version_id ?? instance.minecraft_version} · 目录：{instance.directory}
+            </p>
+
+            <div className="settings-actions">
+              <button className="ghost-button" onClick={onLaunch}>
+                <Play size={15} /> 启动
+              </button>
+              <button className="primary-button" onClick={() => void save()} disabled={busy === "save"}>
+                {busy === "save" ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />} 保存设置
+              </button>
+            </div>
+
+            {instance.loader !== "vanilla" && (
+              <section className="manager-section">
+                <h4>加载器安装</h4>
+                <div className="inline-field">
+                  <input
+                    value={loaderVersion}
+                    onChange={(event) => setLoaderVersion(event.target.value)}
+                    placeholder={`${loaderLabel(instance.loader)} 版本，例如 0.16.0 / 47.4.0`}
+                  />
+                  <button className="ghost-button" onClick={() => void installLoader()} disabled={busy === "loader"}>
+                    {busy === "loader" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} 自动安装
+                  </button>
+                </div>
+                {busy === "loader" && managerProgress && <LoaderProgressLine progress={managerProgress} />}
+                <div className="inline-field">
+                  <button
+                    className="ghost-button"
+                    onClick={() => void installCompanion()}
+                    disabled={busy === "companion"}
+                  >
+                    {busy === "companion" ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} 安装 AI
+                    伙伴（Fabric 1.21.x）
+                  </button>
+                </div>
+                <p className="security-note">
+                  Fabric / Legacy Fabric / Forge / NeoForge / Cleanroom 使用官方无头安装器；OptiFine、LabyMod、LiteLoader
+                  请手动导入。
+                </p>
+                {installLog && <pre className="installer-log">{installLog}</pre>}
+              </section>
+            )}
+
+            <section className="manager-section">
+              <h4>整合包与世界</h4>
+              <div className="manager-actions">
+                <button className="ghost-button" onClick={() => void importPack()} disabled={busy === "pack"}>
+                  {busy === "pack" ? <LoaderCircle className="spin" size={15} /> : <PackageOpen size={15} />} 导入整合包
                 </button>
-              </div>
-              {busy === "loader" && managerProgress && <LoaderProgressLine progress={managerProgress} />}
-              <div className="inline-field">
-                <button
-                  className="ghost-button"
-                  onClick={() => void installCompanion()}
-                  disabled={busy === "companion"}
-                >
-                  {busy === "companion" ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} 安装 AI 伙伴（Fabric 1.21.x）
+                <button className="ghost-button" onClick={() => void importWorld()} disabled={busy === "world"}>
+                  {busy === "world" ? <LoaderCircle className="spin" size={15} /> : <Globe2 size={15} />} 导入世界
+                </button>
+                <button className="ghost-button" onClick={() => void exportPack()} disabled={busy === "export"}>
+                  {busy === "export" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} 导出整合包
                 </button>
               </div>
               <p className="security-note">
-                Fabric / Legacy Fabric / Forge / NeoForge / Cleanroom 使用官方无头安装器；OptiFine、LabyMod、LiteLoader 请手动导入。
+                支持 .mrpack 与 CurseForge zip 导入；导出为 .mrpack，本地 mod 放入 overrides/mods。
               </p>
-              {installLog && <pre className="installer-log">{installLog}</pre>}
             </section>
-          )}
+          </div>
+        )}
 
-          <section className="manager-section">
-            <h4>整合包与世界</h4>
-            <div className="manager-actions">
-              <button className="ghost-button" onClick={() => void importPack()} disabled={busy === "pack"}>
-                {busy === "pack" ? <LoaderCircle className="spin" size={15} /> : <PackageOpen size={15} />} 导入整合包
-              </button>
-              <button className="ghost-button" onClick={() => void importWorld()} disabled={busy === "world"}>
-                {busy === "world" ? <LoaderCircle className="spin" size={15} /> : <Globe2 size={15} />} 导入世界
-              </button>
-              <button className="ghost-button" onClick={() => void exportPack()} disabled={busy === "export"}>
-                {busy === "export" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} 导出整合包
-              </button>
-            </div>
-            <p className="security-note">
-              支持 .mrpack 与 CurseForge zip 导入；导出为 .mrpack，本地 mod 放入 overrides/mods。
-            </p>
-          </section>
-        </div>
+        {(tab === "mod" || tab === "shader" || tab === "resourcepack" || tab === "schematic") && (
+          <ContentPanel instanceId={instance.id} kind={tab} onNotice={onNotice} onChanged={() => void reloadSummary()} />
+        )}
+        {tab === "save" && <SavesPanel instanceId={instance.id} onNotice={onNotice} onChanged={() => void reloadSummary()} />}
+        {tab === "screenshot" && (
+          <ScreenshotsPanel instanceId={instance.id} onNotice={onNotice} onChanged={() => void reloadSummary()} />
+        )}
+        {tab === "server" && <ServersPanel instanceId={instance.id} onNotice={onNotice} onChanged={() => void reloadSummary()} />}
+        {tab === "config" && <ConfigPanel instanceId={instance.id} onNotice={onNotice} />}
       </div>
     </div>
   );
+}
+
+function ContentPanel({
+  instanceId,
+  kind,
+  onNotice,
+  onChanged,
+}: {
+  instanceId: string;
+  kind: "mod" | "shader" | "resourcepack" | "schematic";
+  onNotice: (message: string) => void;
+  onChanged: () => void;
+}) {
+  const [items, setItems] = useState<ContentItem[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const reload = async () => {
+    try {
+      setItems(await api.contentList(instanceId, kind));
+    } catch (error) {
+      setItems([]);
+      onNotice(String(error));
+    }
+  };
+
+  useEffect(() => {
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId, kind]);
+
+  const remove = (item: ContentItem) =>
+    withBusy(setBusy, item.name, async () => {
+      if (!window.confirm(`删除「${item.name}」？此操作不可撤销。`)) return;
+      await api.contentDelete(instanceId, kind, item.name);
+      await reload();
+      onChanged();
+      onNotice("已删除");
+    });
+
+  const toggle = (item: ContentItem) =>
+    withBusy(setBusy, item.name, async () => {
+      await api.modToggle(instanceId, item.name, !(item.enabled ?? true));
+      await reload();
+      onChanged();
+    });
+
+  const upload = () =>
+    withBusy(setBusy, "upload", async () => {
+      const source = await api.pickContentFile(kind);
+      if (!source) return;
+      const name = await api.contentUpload(instanceId, kind, source);
+      await reload();
+      onChanged();
+      onNotice(`已导入 ${name}`);
+    });
+
+  const labels: Record<string, string> = {
+    mod: "模组",
+    shader: "光影包",
+    resourcepack: "资源包",
+    schematic: "原理图",
+  };
+  const folder = { mod: "mods", shader: "shaderpacks", resourcepack: "resourcepacks", schematic: "schematics" }[kind];
+
+  return (
+    <div className="content-panel manager-scroll">
+      <div className="content-toolbar">
+        <span className="content-hint">
+          {labels[kind]} · {items?.length ?? "…"} 项 · 位于 {folder}/
+        </span>
+        <div className="manager-actions">
+          {(kind === "shader" || kind === "resourcepack" || kind === "schematic") && (
+            <button className="ghost-button" onClick={() => void upload()} disabled={busy === "upload"}>
+              {busy === "upload" ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />} 导入文件
+            </button>
+          )}
+          <button className="ghost-button" onClick={() => void reload()}>
+            <RefreshCw size={15} /> 刷新
+          </button>
+          <button className="ghost-button" onClick={() => void api.contentOpenFolder(instanceId, kind)}>
+            <FolderOpen size={15} /> 打开目录
+          </button>
+        </div>
+      </div>
+
+      {items === null ? (
+        <div className="content-empty">正在读取…</div>
+      ) : items.length === 0 ? (
+        <div className="content-empty">暂无内容</div>
+      ) : (
+        <div className="content-list">
+          {items.map((item) => {
+            const disabledMod = kind === "mod" && item.enabled === false;
+            return (
+              <div className={`content-row ${disabledMod ? "disabled" : ""}`} key={item.name}>
+                <div className="content-main">
+                  <span className="content-name" title={item.name}>
+                    {item.name}
+                  </span>
+                  <span className="content-meta">
+                    {item.is_dir ? "文件夹" : formatSize(item.size)} · {formatUnix(item.modified)}
+                  </span>
+                </div>
+                <div className="content-actions">
+                  {kind === "mod" && item.enabled !== null && item.enabled !== undefined && (
+                    <button
+                      className="ghost-button small"
+                      onClick={() => void toggle(item)}
+                      disabled={busy === item.name}
+                    >
+                      {item.enabled ? <EyeOff size={14} /> : <Eye size={14} />}
+                      {item.enabled ? "禁用" : "启用"}
+                    </button>
+                  )}
+                  <button
+                    className="danger-button small"
+                    onClick={() => void remove(item)}
+                    disabled={busy === item.name}
+                  >
+                    <Trash2 size={14} /> 删除
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SavesPanel({
+  instanceId,
+  onNotice,
+  onChanged,
+}: {
+  instanceId: string;
+  onNotice: (message: string) => void;
+  onChanged: () => void;
+}) {
+  const [items, setItems] = useState<ContentItem[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const reload = async () => {
+    try {
+      setItems(await api.contentList(instanceId, "save"));
+    } catch (error) {
+      setItems([]);
+      onNotice(String(error));
+    }
+  };
+
+  useEffect(() => {
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId]);
+
+  const remove = (item: ContentItem) =>
+    withBusy(setBusy, item.name, async () => {
+      if (!window.confirm(`删除世界「${item.name}」及其所有数据？此操作不可撤销。`)) return;
+      await api.contentDelete(instanceId, "save", item.name);
+      await reload();
+      onChanged();
+      onNotice("世界已删除");
+    });
+
+  return (
+    <div className="content-panel manager-scroll">
+      <div className="content-toolbar">
+        <span className="content-hint">存档 · {items?.length ?? "…"} 个世界 · 位于 saves/</span>
+        <div className="manager-actions">
+          <button className="ghost-button" onClick={() => void reload()}>
+            <RefreshCw size={15} /> 刷新
+          </button>
+          <button className="ghost-button" onClick={() => void api.contentOpenFolder(instanceId, "save")}>
+            <FolderOpen size={15} /> 打开目录
+          </button>
+        </div>
+      </div>
+
+      {items === null ? (
+        <div className="content-empty">正在读取…</div>
+      ) : items.length === 0 ? (
+        <div className="content-empty">暂无存档</div>
+      ) : (
+        <div className="content-list">
+          {items.map((item) => (
+            <div className="content-row" key={item.name}>
+              <div className="content-main">
+                <span className="content-name" title={item.name}>
+                  {item.level_name || item.name}
+                </span>
+                <span className="content-meta">
+                  {item.level_name && item.level_name !== item.name ? `目录 ${item.name} · ` : ""}
+                  {formatSize(item.size)} · 最后游玩 {formatUnix(item.last_played ?? item.modified)}
+                </span>
+              </div>
+              <div className="content-actions">
+                <button className="ghost-button small" onClick={() => void api.saveOpen(instanceId, item.name)}>
+                  <FolderOpen size={14} /> 打开
+                </button>
+                <button className="danger-button small" onClick={() => void remove(item)} disabled={busy === item.name}>
+                  <Trash2 size={14} /> 删除
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScreenshotsPanel({
+  instanceId,
+  onNotice,
+  onChanged,
+}: {
+  instanceId: string;
+  onNotice: (message: string) => void;
+  onChanged: () => void;
+}) {
+  const [items, setItems] = useState<ContentItem[] | null>(null);
+  const [thumbs, setThumbs] = useState<Record<string, string>>({});
+  const [preview, setPreview] = useState<{ name: string; url: string } | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const cancelRef = useRef(0);
+
+  const reload = async () => {
+    cancelRef.current += 1;
+    const generation = cancelRef.current;
+    try {
+      const list = await api.contentList(instanceId, "screenshot");
+      setItems(list);
+      setThumbs({});
+      // 分批加载缩略图，避免一次性 IPC 过重。
+      const targets = list.slice(0, 80);
+      const batch = 6;
+      for (let index = 0; index < targets.length; index += batch) {
+        if (cancelRef.current !== generation) return;
+        const slice = targets.slice(index, index + batch);
+        const loaded = await Promise.all(
+          slice.map(async (item) => {
+            try {
+              return [item.name, await api.imagePreview(instanceId, "screenshot", item.name)] as const;
+            } catch {
+              return [item.name, ""] as const;
+            }
+          }),
+        );
+        if (cancelRef.current !== generation) return;
+        setThumbs((prev) => {
+          const next = { ...prev };
+          for (const [name, url] of loaded) next[name] = url;
+          return next;
+        });
+      }
+    } catch (error) {
+      setItems([]);
+      onNotice(String(error));
+    }
+  };
+
+  useEffect(() => {
+    void reload();
+    return () => {
+      cancelRef.current += 1;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId]);
+
+  const openPreview = async (item: ContentItem) => {
+    try {
+      const url = thumbs[item.name] || (await api.imagePreview(instanceId, "screenshot", item.name));
+      if (url) setPreview({ name: item.name, url });
+    } catch (error) {
+      onNotice(String(error));
+    }
+  };
+
+  const remove = (item: ContentItem) =>
+    withBusy(setBusy, item.name, async () => {
+      if (!window.confirm(`删除截图「${item.name}」？此操作不可撤销。`)) return;
+      await api.contentDelete(instanceId, "screenshot", item.name);
+      await reload();
+      onChanged();
+    });
+
+  return (
+    <div className="content-panel manager-scroll">
+      <div className="content-toolbar">
+        <span className="content-hint">截图 · {items?.length ?? "…"} 张 · 位于 screenshots/</span>
+        <div className="manager-actions">
+          <button className="ghost-button" onClick={() => void reload()}>
+            <RefreshCw size={15} /> 刷新
+          </button>
+          <button className="ghost-button" onClick={() => void api.contentOpenFolder(instanceId, "screenshot")}>
+            <FolderOpen size={15} /> 打开目录
+          </button>
+        </div>
+      </div>
+
+      {items === null ? (
+        <div className="content-empty">正在读取…</div>
+      ) : items.length === 0 ? (
+        <div className="content-empty">暂无截图（游戏中按 F2 截图）</div>
+      ) : (
+        <div className="screenshot-grid">
+          {items.map((item) => (
+            <figure className="screenshot-card" key={item.name} onClick={() => void openPreview(item)}>
+              <div className="screenshot-thumb">
+                {thumbs[item.name] ? (
+                  <img src={thumbs[item.name]} alt={item.name} loading="lazy" />
+                ) : (
+                  <ImageIcon size={26} />
+                )}
+              </div>
+              <figcaption>
+                <span title={item.name}>{item.name}</span>
+                <span>{formatUnix(item.modified)}</span>
+              </figcaption>
+              <button
+                className="danger-button small screenshot-delete"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void remove(item);
+                }}
+                disabled={busy === item.name}
+              >
+                <Trash2 size={13} />
+              </button>
+            </figure>
+          ))}
+        </div>
+      )}
+
+      {preview && (
+        <div className="modal-backdrop inner" onMouseDown={() => setPreview(null)}>
+          <div className="preview-box">
+            <div className="preview-top">
+              <span>{preview.name}</span>
+              <button className="icon-button" onClick={() => setPreview(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <img src={preview.url} alt={preview.name} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ServersPanel({
+  instanceId,
+  onNotice,
+  onChanged,
+}: {
+  instanceId: string;
+  onNotice: (message: string) => void;
+  onChanged: () => void;
+}) {
+  const [entries, setEntries] = useState<ServerEntry[] | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const reload = async () => {
+    try {
+      setEntries(await api.serverList(instanceId));
+    } catch (error) {
+      setEntries([]);
+      onNotice(String(error));
+    }
+  };
+
+  useEffect(() => {
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId]);
+
+  const update = (index: number, patch: Partial<ServerEntry>) => {
+    setEntries((prev) => {
+      if (!prev) return prev;
+      const next = [...prev];
+      next[index] = { ...next[index], ...patch };
+      return next;
+    });
+  };
+
+  const add = () => {
+    setEntries((prev) => [...(prev ?? []), { name: "新的服务器", ip: "", hidden: false }]);
+  };
+
+  const removeAt = (index: number) => {
+    setEntries((prev) => (prev ? prev.filter((_, i) => i !== index) : prev));
+  };
+
+  const save = async () => {
+    if (!entries) return;
+    setBusy(true);
+    try {
+      const payload: ServerInput[] = entries.map((entry) => ({
+        name: entry.name.trim(),
+        ip: entry.ip.trim(),
+        hidden: entry.hidden,
+        icon_base64: entry.icon_data_url ?? "",
+      }));
+      await api.serverSet(instanceId, payload);
+      await reload();
+      onChanged();
+      onNotice("服务器列表已保存（原文件已备份）");
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="content-panel manager-scroll">
+      <div className="content-toolbar">
+        <span className="content-hint">多人游戏服务器 · 来自 servers.dat（保存时自动备份）</span>
+        <div className="manager-actions">
+          <button className="ghost-button" onClick={() => void reload()}>
+            <RefreshCw size={15} /> 重新读取
+          </button>
+          <button className="ghost-button" onClick={add}>
+            <Plus size={15} /> 添加服务器
+          </button>
+          <button className="primary-button" onClick={() => void save()} disabled={busy || entries === null}>
+            {busy ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />} 保存
+          </button>
+        </div>
+      </div>
+
+      {entries === null ? (
+        <div className="content-empty">正在读取…</div>
+      ) : entries.length === 0 ? (
+        <div className="content-empty">还没有保存的服务器</div>
+      ) : (
+        <div className="server-list">
+          {entries.map((entry, index) => (
+            <div className="server-row" key={index}>
+              {entry.icon_data_url ? (
+                <img className="server-icon" src={entry.icon_data_url} alt="" />
+              ) : (
+                <div className="server-icon placeholder">
+                  <ServerIcon size={18} />
+                </div>
+              )}
+              <input
+                className="server-name"
+                value={entry.name}
+                onChange={(event) => update(index, { name: event.target.value })}
+                placeholder="名称"
+              />
+              <input
+                value={entry.ip}
+                onChange={(event) => update(index, { ip: event.target.value })}
+                placeholder="服务器地址，例如 mc.example.com:25565"
+              />
+              <label className="server-hidden" title="在服务器列表中隐藏">
+                <input
+                  type="checkbox"
+                  checked={entry.hidden}
+                  onChange={(event) => update(index, { hidden: event.target.checked })}
+                />
+                隐藏
+              </label>
+              <button className="danger-button small" onClick={() => removeAt(index)}>
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="security-note">修改仅影响本实例的 servers.dat；游戏内添加/删除的服务器需点击「重新读取」后可见。</p>
+    </div>
+  );
+}
+
+function ConfigPanel({ instanceId, onNotice }: { instanceId: string; onNotice: (message: string) => void }) {
+  const [files, setFiles] = useState<ConfigEntry[] | null>(null);
+  const [activePath, setActivePath] = useState<string>("");
+  const [draft, setDraft] = useState("");
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [filter, setFilter] = useState("");
+
+  const reload = async () => {
+    try {
+      const list = await api.configList(instanceId);
+      setFiles(list);
+      return list;
+    } catch (error) {
+      setFiles([]);
+      onNotice(String(error));
+      return [];
+    }
+  };
+
+  useEffect(() => {
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId]);
+
+  const open = async (path: string) => {
+    try {
+      const file = await api.configRead(instanceId, path);
+      setActivePath(file.path);
+      setDraft(file.content);
+      setDirty(false);
+    } catch (error) {
+      onNotice(String(error));
+    }
+  };
+
+  const save = async () => {
+    if (!activePath) return;
+    setBusy(true);
+    try {
+      await api.configWrite(instanceId, activePath, draft);
+      await reload();
+      setDirty(false);
+      onNotice(`已保存 ${activePath}（原文件已备份）`);
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const create = async () => {
+    const name = window.prompt("新配置文件名（将创建在 config/ 下，例如 modid-example.toml）");
+    if (!name) return;
+    const cleaned = name.trim().replace(/\\/g, "/").replace(/^\/+/, "");
+    if (!cleaned || cleaned.includes("..")) {
+      onNotice("文件名无效");
+      return;
+    }
+    const target = `config/${cleaned}`;
+    try {
+      await api.configWrite(instanceId, target, "");
+      await reload();
+      await open(target);
+    } catch (error) {
+      onNotice(String(error));
+    }
+  };
+
+  const shown = (files ?? []).filter((file) => !filter || file.path.toLowerCase().includes(filter.toLowerCase()));
+
+  return (
+    <div className="config-panel">
+      <div className="config-side manager-scroll">
+        <div className="content-toolbar">
+          <span className="content-hint">配置文件</span>
+        </div>
+        <div className="inline-field">
+          <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="搜索文件…" />
+        </div>
+        <div className="config-actions">
+          <button className="ghost-button small" onClick={() => void reload()}>
+            <RefreshCw size={14} /> 刷新
+          </button>
+          <button className="ghost-button small" onClick={() => void create()}>
+            <Plus size={14} /> 新建
+          </button>
+        </div>
+        {files === null ? (
+          <div className="content-empty">正在读取…</div>
+        ) : shown.length === 0 ? (
+          <div className="content-empty">没有可编辑的配置文件</div>
+        ) : (
+          <div className="config-file-list">
+            {shown.map((file) => (
+              <button
+                key={file.path}
+                className={`config-file ${activePath === file.path ? "active" : ""}`}
+                title={`${file.path} · ${formatSize(file.size)}`}
+                onClick={() => void open(file.path)}
+              >
+                <FileText size={13} />
+                <span>{file.path}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="config-editor">
+        {activePath ? (
+          <>
+            <div className="content-toolbar">
+              <span className="content-hint" title={activePath}>
+                {activePath}
+                {dirty ? " · 未保存" : ""}
+              </span>
+              <div className="manager-actions">
+                <button className="primary-button" onClick={() => void save()} disabled={busy || !dirty}>
+                  {busy ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />} 保存
+                </button>
+              </div>
+            </div>
+            <textarea
+              className="config-textarea"
+              value={draft}
+              spellCheck={false}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                setDirty(true);
+              }}
+            />
+            <p className="security-note">保存时自动在同目录生成 .aurora-bak 备份；仅支持文本文件（≤1 MB）。</p>
+          </>
+        ) : (
+          <div className="content-empty">从左侧选择一个配置文件进行编辑（options.txt 与 config/ 目录）</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+async function withBusy(
+  setBusy: (value: string | null) => void,
+  key: string,
+  action: () => Promise<void>,
+): Promise<void> {
+  setBusy(key);
+  try {
+    await action();
+  } catch (error) {
+    console.error(error);
+    throw error;
+  } finally {
+    setBusy(null);
+  }
 }
 
 function LogPanel({ instanceId, onClose }: { instanceId: string; onClose: () => void }) {

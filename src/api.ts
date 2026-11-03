@@ -189,6 +189,53 @@ export type LittleSkinOauthPoll = {
   account?: AccountView | null;
 };
 export type LoaderInstallResult = { version_id: string; installer: string; log: string };
+
+export type ContentKind =
+  | "mod"
+  | "shader"
+  | "resourcepack"
+  | "datapack"
+  | "save"
+  | "screenshot"
+  | "schematic"
+  | "server";
+
+export type ContentItem = {
+  name: string;
+  is_dir: boolean;
+  size: number;
+  modified: number;
+  enabled?: boolean | null;
+  level_name?: string | null;
+  last_played?: number | null;
+};
+
+export type ContentSummary = {
+  mod_count: number;
+  shader_count: number;
+  resourcepack_count: number;
+  save_count: number;
+  screenshot_count: number;
+  schematic_count: number;
+  server_count: number;
+};
+
+export type ServerEntry = {
+  name: string;
+  ip: string;
+  hidden: boolean;
+  icon_data_url?: string | null;
+};
+
+export type ServerInput = {
+  name: string;
+  ip: string;
+  hidden: boolean;
+  icon_base64?: string | null;
+};
+
+export type ConfigEntry = { path: string; size: number; modified: number };
+export type ConfigFile = { path: string; content: string };
 export type ImportResult = {
   kind: string;
   name: string;
@@ -306,4 +353,29 @@ export const api = {
   mpStatus: () => invoke<MpStatus>("mp_status"),
   littleskinOauthPoll: (deviceCode: string) =>
     invoke<LittleSkinOauthPoll>("littleskin_oauth_poll", { deviceCode }),
+  contentSummary: (instanceId: string) =>
+    invoke<ContentSummary>("instance_content_summary", { instanceId }),
+  contentList: (instanceId: string, kind: ContentKind) =>
+    invoke<ContentItem[]>("instance_content_list", { instanceId, kind }),
+  contentDelete: (instanceId: string, kind: ContentKind, name: string) =>
+    invoke<void>("instance_content_delete", { instanceId, kind, name }),
+  contentOpenFolder: (instanceId: string, kind: ContentKind) =>
+    invoke<void>("instance_content_open_folder", { instanceId, kind }),
+  contentUpload: (instanceId: string, kind: ContentKind, source: string) =>
+    invoke<string>("instance_content_upload", { instanceId, kind, source }),
+  pickContentFile: (kind: ContentKind) => invoke<string | null>("pick_content_file", { kind }),
+  modToggle: (instanceId: string, name: string, enable: boolean) =>
+    invoke<void>("instance_mod_toggle", { instanceId, name, enable }),
+  imagePreview: (instanceId: string, kind: ContentKind, name: string) =>
+    invoke<string>("instance_image_preview", { instanceId, kind, name }),
+  saveOpen: (instanceId: string, name: string) =>
+    invoke<void>("instance_save_open", { instanceId, name }),
+  serverList: (instanceId: string) => invoke<ServerEntry[]>("instance_server_list", { instanceId }),
+  serverSet: (instanceId: string, servers: ServerInput[]) =>
+    invoke<void>("instance_server_set", { instanceId, servers }),
+  configList: (instanceId: string) => invoke<ConfigEntry[]>("instance_config_list", { instanceId }),
+  configRead: (instanceId: string, path: string) =>
+    invoke<ConfigFile>("instance_config_read", { instanceId, path }),
+  configWrite: (instanceId: string, path: string, content: string) =>
+    invoke<void>("instance_config_write", { instanceId, path, content }),
 };

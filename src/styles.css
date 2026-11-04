@@ -1740,6 +1740,51 @@ button:disabled {
   font-size: 12px;
 }
 
+.content-search {
+  width: 150px;
+  padding: 6px 10px;
+  border: 1px solid #233049;
+  border-radius: 8px;
+  background: #0a111e;
+  color: #e9edf5;
+  font-size: 12px;
+  outline: none;
+}
+
+.content-search:focus {
+  border-color: #3c4d70;
+}
+
+.mod-loader {
+  margin-left: 7px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #141d2f;
+  color: #8fd0b8;
+  font-size: 9.5px;
+  font-style: normal;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+
+.mod-loader.forge {
+  color: #d8a98f;
+}
+
+.mod-loader.neoforge {
+  color: #f0b57e;
+}
+
+.mod-loader.quilt {
+  color: #c6a8f0;
+}
+
+.content-file {
+  color: #6b7a90;
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
 .content-list {
   display: grid;
   gap: 6px;
@@ -1894,6 +1939,22 @@ button:disabled {
   padding: 10px 14px;
   border-bottom: 1px solid #233049;
   font-size: 12.5px;
+}
+
+.preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.preview-actions small {
+  margin-right: 6px;
+  color: #6b7a90;
+  font-size: 10.5px;
+}
+
+.preview-actions .icon-button svg.flip {
+  transform: rotate(180deg);
 }
 
 .preview-box img {

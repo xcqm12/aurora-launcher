@@ -54,6 +54,7 @@ import {
   DiscoverItem,
   Instance,
   LoaderCatalog,
+  ModMeta,
   ResourceFile,
   ResourceVersion,
   ServerEntry,
@@ -1935,6 +1936,8 @@ function ContentPanel({
   onChanged: () => void;
 }) {
   const [items, setItems] = useState<ContentItem[] | null>(null);
+  const [metas, setMetas] = useState<Record<string, ModMeta>>({});
+  const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
 
   const reload = async () => {
@@ -1943,6 +1946,13 @@ function ContentPanel({
     } catch (error) {
       setItems([]);
       onNotice(String(error));
+    }
+    if (kind === "mod") {
+      // 元数据解析失败不影响列表展示，退化为文件名。
+      api
+        .modMetadata(instanceId)
+        .then(setMetas)
+        .catch(() => setMetas({}));
     }
   };
 
@@ -1985,13 +1995,28 @@ function ContentPanel({
   };
   const folder = { mod: "mods", shader: "shaderpacks", resourcepack: "resourcepacks", schematic: "schematics" }[kind];
 
+  const keyword = filter.trim().toLowerCase();
+  const shown = (items ?? []).filter((item) => {
+    if (!keyword) return true;
+    const meta = metas[item.name];
+    return [item.name, meta?.title, meta?.mod_id, meta?.version, item.level_name]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(keyword));
+  });
+
   return (
     <div className="content-panel manager-scroll">
       <div className="content-toolbar">
         <span className="content-hint">
-          {labels[kind]} · {items?.length ?? "…"} 项 · 位于 {folder}/
+          {labels[kind]} · {keyword ? `${shown.length}/${items?.length ?? 0}` : (items?.length ?? "…")} 项 · 位于 {folder}/
         </span>
         <div className="manager-actions">
+          <input
+            className="content-search"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder={`搜索${labels[kind]}…`}
+          />
           {(kind === "shader" || kind === "resourcepack" || kind === "schematic") && (
             <button className="ghost-button" onClick={() => void upload()} disabled={busy === "upload"}>
               {busy === "upload" ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />} 导入文件
@@ -2008,20 +2033,34 @@ function ContentPanel({
 
       {items === null ? (
         <div className="content-empty">正在读取…</div>
-      ) : items.length === 0 ? (
-        <div className="content-empty">暂无内容</div>
+      ) : shown.length === 0 ? (
+        <div className="content-empty">{keyword ? "没有匹配的条目" : "暂无内容"}</div>
       ) : (
         <div className="content-list">
-          {items.map((item) => {
+          {shown.map((item) => {
             const disabledMod = kind === "mod" && item.enabled === false;
+            const meta = metas[item.name];
+            const title = meta?.title || item.name;
+            const details = [meta?.version, meta?.loader, item.is_dir ? "文件夹" : formatSize(item.size)]
+              .filter(Boolean)
+              .join(" · ");
             return (
               <div className={`content-row ${disabledMod ? "disabled" : ""}`} key={item.name}>
                 <div className="content-main">
-                  <span className="content-name" title={item.name}>
-                    {item.name}
+                  <span className="content-name" title={meta?.description || item.name}>
+                    {title}
+                    {meta?.loader && <em className={`mod-loader ${meta.loader}`}>{meta.loader}</em>}
                   </span>
                   <span className="content-meta">
-                    {item.is_dir ? "文件夹" : formatSize(item.size)} · {formatUnix(item.modified)}
+                    {title !== item.name && (
+                      <>
+                        <span className="content-file" title={item.name}>
+                          {item.name}
+                        </span>
+                        {" · "}
+                      </>
+                    )}
+                    {details} · {formatUnix(item.modified)}
                   </span>
                 </div>
                 <div className="content-actions">
@@ -2201,6 +2240,25 @@ function ScreenshotsPanel({
     }
   };
 
+  const stepPreview = async (delta: number) => {
+    if (!preview || !items) return;
+    const index = items.findIndex((item) => item.name === preview.name);
+    const next = items[index + delta];
+    if (index >= 0 && next) await openPreview(next);
+  };
+
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPreview(null);
+      if (event.key === "ArrowRight") void stepPreview(1);
+      if (event.key === "ArrowLeft") void stepPreview(-1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preview, items, thumbs]);
+
   const remove = (item: ContentItem) =>
     withBusy(setBusy, item.name, async () => {
       if (!window.confirm(`删除截图「${item.name}」？此操作不可撤销。`)) return;
@@ -2262,9 +2320,18 @@ function ScreenshotsPanel({
           <div className="preview-box">
             <div className="preview-top">
               <span>{preview.name}</span>
-              <button className="icon-button" onClick={() => setPreview(null)}>
-                <X size={16} />
-              </button>
+              <div className="preview-actions">
+                <small>← → 切换 · Esc 关闭</small>
+                <button className="icon-button" onClick={() => void stepPreview(-1)} title="上一张">
+                  <ChevronRight size={16} className="flip" />
+                </button>
+                <button className="icon-button" onClick={() => void stepPreview(1)} title="下一张">
+                  <ChevronRight size={16} />
+                </button>
+                <button className="icon-button" onClick={() => setPreview(null)}>
+                  <X size={16} />
+                </button>
+              </div>
             </div>
             <img src={preview.url} alt={preview.name} />
           </div>
@@ -2427,6 +2494,11 @@ function ConfigPanel({ instanceId, onNotice }: { instanceId: string; onNotice: (
   }, [instanceId]);
 
   const open = async (path: string) => {
+    // 切换文件前拦下未保存的改动，避免静默丢失。
+    if (dirty && path !== activePath) {
+      const leave = window.confirm(`「${activePath}」有未保存的改动，放弃并打开「${path}」？`);
+      if (!leave) return;
+    }
     try {
       const file = await api.configRead(instanceId, path);
       setActivePath(file.path);
@@ -2530,6 +2602,12 @@ function ConfigPanel({ instanceId, onNotice }: { instanceId: string; onNotice: (
               onChange={(event) => {
                 setDraft(event.target.value);
                 setDirty(true);
+              }}
+              onKeyDown={(event) => {
+                if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+                  event.preventDefault();
+                  if (dirty && !busy) void save();
+                }
               }}
             />
             <p className="security-note">保存时自动在同目录生成 .aurora-bak 备份；仅支持文本文件（≤1 MB）。</p>

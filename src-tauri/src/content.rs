@@ -7,9 +7,11 @@
 use base64::Engine;
 use serde::Serialize;
 use std::{
+    collections::HashMap,
     fs,
     io::Read,
     path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
     time::UNIX_EPOCH,
 };
 
@@ -1050,6 +1052,245 @@ pub(crate) fn instance_save_open(
         .map_err(|e| format!("无法打开目录：{e}"))
 }
 
+/// 模组元数据：从 jar 内的 fabric.mod.json / quilt.mod.json /
+/// META-INF/mods.toml / mcmod.info 本地解析，不联网。
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub(crate) struct ModMeta {
+    title: Option<String>,
+    version: Option<String>,
+    mod_id: Option<String>,
+    loader: Option<String>,
+    description: Option<String>,
+}
+
+const MAX_META_ENTRY: u64 = 256 * 1024;
+const MAX_META_FILES: usize = 800;
+
+type MetaCache = Mutex<HashMap<PathBuf, (u64, u64, Option<ModMeta>)>>;
+
+fn meta_cache() -> &'static MetaCache {
+    static CACHE: OnceLock<MetaCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn clean_text(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Fabric 常把版本号写成 ${version}，构建时未替换的占位符没有意义。
+    if trimmed.starts_with("${") && trimmed.ends_with('}') {
+        return None;
+    }
+    let mut out: String = trimmed.chars().take(220).collect();
+    if trimmed.chars().count() > 220 {
+        out.push('…');
+    }
+    Some(out)
+}
+
+fn read_zip_text(zip: &mut zip::ZipArchive<fs::File>, name: &str) -> Option<String> {
+    let mut entry = zip.by_name(name).ok()?;
+    if entry.size() > MAX_META_ENTRY {
+        return None;
+    }
+    let mut buffer = Vec::new();
+    entry.read_to_end(&mut buffer).ok()?;
+    Some(String::from_utf8_lossy(&buffer).into_owned())
+}
+
+/// 取 TOML 字符串字面量的内容，支持 """ 与 ''' 多行写法。
+fn toml_unquote(value: &str) -> Option<&str> {
+    for quote in ["'''", "\"\"\"", "\"", "'"] {
+        if let Some(rest) = value.strip_prefix(quote) {
+            if let Some(inner) = rest.strip_suffix(quote) {
+                return Some(inner);
+            }
+        }
+    }
+    None
+}
+
+/// 从 TOML 文本里取 `key = "value"`（Forge/NeoForge 的 mods.toml 用这种写法）。
+fn toml_string(text: &str, key: &str) -> Option<String> {
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.starts_with('#') || line.starts_with("[[") {
+            continue;
+        }
+        let Some((name, rest)) = line.split_once('=') else {
+            continue;
+        };
+        if name.trim() != key {
+            continue;
+        }
+        return toml_unquote(rest.trim()).and_then(clean_text);
+    }
+    None
+}
+
+fn parse_fabric(text: &str) -> Option<ModMeta> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    Some(ModMeta {
+        title: value
+            .get("name")
+            .and_then(|v| v.as_str())
+            .and_then(clean_text),
+        version: value
+            .get("version")
+            .and_then(|v| v.as_str())
+            .and_then(clean_text),
+        mod_id: value
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(clean_text),
+        loader: Some("fabric".into()),
+        description: value
+            .get("description")
+            .and_then(|v| v.as_str())
+            .and_then(clean_text),
+    })
+}
+
+fn parse_quilt(text: &str) -> Option<ModMeta> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let loader = value.get("quilt_loader")?;
+    let metadata = loader.get("metadata");
+    Some(ModMeta {
+        title: metadata
+            .and_then(|m| m.get("name"))
+            .and_then(|v| v.as_str())
+            .and_then(clean_text),
+        version: loader
+            .get("version")
+            .and_then(|v| v.as_str())
+            .and_then(clean_text),
+        mod_id: loader.get("id").and_then(|v| v.as_str()).and_then(clean_text),
+        loader: Some("quilt".into()),
+        description: metadata
+            .and_then(|m| m.get("description"))
+            .and_then(|v| v.as_str())
+            .and_then(clean_text),
+    })
+}
+
+fn parse_forge(text: &str, loader: &str) -> Option<ModMeta> {
+    // 取第一个 [[mods]] 块；modId 与 displayName 都在其中。
+    let block = text.split("[[mods]]").nth(1).unwrap_or(text);
+    Some(ModMeta {
+        title: toml_string(block, "displayName"),
+        version: toml_string(block, "version"),
+        mod_id: toml_string(block, "modId"),
+        loader: Some(loader.into()),
+        description: toml_string(block, "description"),
+    })
+}
+
+fn parse_mcmod_info(text: &str) -> Option<ModMeta> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let first = value
+        .as_array()
+        .and_then(|items| items.first())
+        .or_else(|| value.get("modList").and_then(|list| list.get(0)))?;
+    Some(ModMeta {
+        title: first
+            .get("name")
+            .and_then(|v| v.as_str())
+            .and_then(clean_text),
+        version: first
+            .get("version")
+            .and_then(|v| v.as_str())
+            .and_then(clean_text),
+        mod_id: first
+            .get("modid")
+            .and_then(|v| v.as_str())
+            .and_then(clean_text),
+        loader: Some("forge".into()),
+        description: first
+            .get("description")
+            .and_then(|v| v.as_str())
+            .and_then(clean_text),
+    })
+}
+
+fn read_mod_meta(path: &Path) -> Option<ModMeta> {
+    let file = fs::File::open(path).ok()?;
+    let mut zip = zip::ZipArchive::new(file).ok()?;
+
+    let candidates: [(&str, fn(&str) -> Option<ModMeta>); 4] = [
+        ("fabric.mod.json", parse_fabric),
+        ("quilt.mod.json", parse_quilt),
+        ("META-INF/neoforge.mods.toml", |text| {
+            parse_forge(text, "neoforge")
+        }),
+        ("META-INF/mods.toml", |text| parse_forge(text, "forge")),
+    ];
+    for (name, parser) in candidates {
+        if let Some(text) = read_zip_text(&mut zip, name) {
+            if let Some(meta) = parser(&text) {
+                if meta.title.is_some() || meta.mod_id.is_some() {
+                    return Some(meta);
+                }
+            }
+        }
+    }
+    if let Some(text) = read_zip_text(&mut zip, "mcmod.info") {
+        if let Some(meta) = parse_mcmod_info(&text) {
+            if meta.title.is_some() || meta.mod_id.is_some() {
+                return Some(meta);
+            }
+        }
+    }
+    None
+}
+
+/// 带 (大小, 修改时间) 校验的缓存：重复打开面板不会反复解压 jar。
+fn cached_mod_meta(path: &Path) -> Option<ModMeta> {
+    let (size, modified) = file_meta(path);
+    if let Ok(cache) = meta_cache().lock() {
+        if let Some((cached_size, cached_time, meta)) = cache.get(path) {
+            if *cached_size == size && *cached_time == modified {
+                return meta.clone();
+            }
+        }
+    }
+    let meta = read_mod_meta(path);
+    if let Ok(mut cache) = meta_cache().lock() {
+        cache.insert(path.to_path_buf(), (size, modified, meta.clone()));
+    }
+    meta
+}
+
+#[tauri::command]
+pub(crate) fn instance_mod_metadata(
+    app: tauri::AppHandle,
+    instance_id: String,
+) -> Result<HashMap<String, ModMeta>, String> {
+    let root = instance_root(&app, &instance_id)?;
+    let dir = kind_dir(&root, "mod")?;
+    let mut out = HashMap::new();
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Ok(out);
+    };
+    for entry in entries.flatten().take(MAX_META_FILES) {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        if !name.to_lowercase().ends_with(".jar") && !name.to_lowercase().ends_with(".jar.disabled")
+        {
+            continue;
+        }
+        if let Some(meta) = cached_mod_meta(&path) {
+            out.insert(name, meta);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1141,5 +1382,59 @@ mod tests {
         assert_eq!(toggle_name("readme.txt", false), None);
         assert_eq!(toggle_name("foo.jar", true), None);
         assert_eq!(toggle_name("foo.jar.disabled", false), None);
+    }
+
+    #[test]
+    fn parses_fabric_metadata() {
+        let meta = parse_fabric(
+            r#"{"schemaVersion":1,"id":"sodium","name":"Sodium","version":"0.5.11+mc1.20.1","description":"Rendering"}"#,
+        )
+        .unwrap();
+        assert_eq!(meta.title.as_deref(), Some("Sodium"));
+        assert_eq!(meta.version.as_deref(), Some("0.5.11+mc1.20.1"));
+        assert_eq!(meta.mod_id.as_deref(), Some("sodium"));
+        assert_eq!(meta.loader.as_deref(), Some("fabric"));
+    }
+
+    #[test]
+    fn skips_unresolved_version_placeholder() {
+        let meta = parse_fabric(r#"{"id":"x","name":"X","version":"${version}"}"#).unwrap();
+        assert_eq!(meta.version, None);
+    }
+
+    #[test]
+    fn parses_forge_toml_metadata() {
+        let text = "modLoader=\"javafml\"\nloaderVersion=\"[47,)\"\n[[mods]]\nmodId=\"examplemod\"\nversion=\"1.2.3\"\ndisplayName=\"Example Mod\"\ndescription='''A demo mod'''\n";
+        let meta = parse_forge(text, "forge").unwrap();
+        assert_eq!(meta.title.as_deref(), Some("Example Mod"));
+        assert_eq!(meta.version.as_deref(), Some("1.2.3"));
+        assert_eq!(meta.mod_id.as_deref(), Some("examplemod"));
+        assert_eq!(meta.description.as_deref(), Some("A demo mod"));
+    }
+
+    #[test]
+    fn parses_quilt_and_mcmod_info() {
+        let quilt = parse_quilt(
+            r#"{"quilt_loader":{"id":"q","version":"2.0.0","metadata":{"name":"Quilt Mod","description":"d"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(quilt.title.as_deref(), Some("Quilt Mod"));
+        assert_eq!(quilt.loader.as_deref(), Some("quilt"));
+
+        let legacy =
+            parse_mcmod_info(r#"[{"modid":"old","name":"Old Mod","version":"1.7.10"}]"#).unwrap();
+        assert_eq!(legacy.title.as_deref(), Some("Old Mod"));
+        assert_eq!(legacy.mod_id.as_deref(), Some("old"));
+        assert_eq!(legacy.loader.as_deref(), Some("forge"));
+    }
+
+    #[test]
+    fn invalid_metadata_is_ignored() {
+        assert!(parse_fabric("not json").is_none());
+        assert!(parse_mcmod_info("{}").is_none());
+        // 没有 [[mods]] 块时不应 panic。
+        let meta = parse_forge("modLoader=\"javafml\"", "forge").unwrap();
+        assert_eq!(meta.title, None);
+        assert_eq!(meta.mod_id, None);
     }
 }

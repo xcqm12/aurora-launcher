@@ -12,6 +12,8 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游
   - **原理图**：列出 `.litematic` / `.schem` / `.schematic` / `.nbt`，支持导入与删除。
   - **服务器**：直接读写 `servers.dat`（gzip + NBT），可修改名称/地址、设置隐藏、增删条目并保存；保存前自动备份原文件（`servers.dat.aurora-bak-<时间戳>`，只保留最近 3 份）。
   - **配置**：编辑实例根目录的 `options.txt` 与 `config/` 目录树下的文本文件（txt/json/toml/cfg/properties/yml 等，单个 ≤1 MB），支持搜索与新建；保存时生成 `*.aurora-bak-<时间戳>` 备份。
+- **模组元数据**：本地读取 jar 里的 `fabric.mod.json` / `quilt.mod.json` / `META-INF/mods.toml` / `mcmod.info`，显示真实名称、版本与加载器标签；按文件大小与修改时间缓存，不联网。
+- **搜索与编辑细节**：各内容页支持关键字过滤（模组可按名称/ID/版本搜索）；配置编辑器在切换文件前提示未保存改动，支持 Ctrl+S 保存；截图预览可用 ←/→ 切换、Esc 关闭。
 - 安全边界：所有内容操作都按实例根目录做路径规范化校验（拒绝 `..` 与绝对路径），删除目录/世界需二次确认，配置写入只允许 `options.txt` 与 `config/` 子树。
 - **更新内容页**：侧边栏新增「更新内容」，用 `include_str!` 把仓库的 `RELEASE_NOTES.md` 编译进程序（安装后不依赖仓库目录），展示当前版本的更新条目并支持展开历史版本；发版时改 `RELEASE_NOTES.md` 重新构建即可同步。
 - 实现：新增后端模块 `src-tauri/src/content.rs`（自带最小 NBT 解析/编码器，gzip 走 `flate2`）与 `src-tauri/src/changelog.rs`，注册 16 个命令；新增 NBT 往返、路径穿越拒绝、启停命名与更新日志解析的单元测试。
@@ -49,7 +51,7 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游
 - Modrinth / CurseForge 资源搜索与校验安装（流式下载 + 实时进度）；CurseForge 密钥 DPAPI 保存，不进入日志和前端。
 - EasyTier 联机：创建/加入房间、房间码、虚拟 IP 展示、日志面板（实验功能，见“联机”章节）。
 - LittleSkin（Yggdrasil + authlib-injector）登录：账户/密码验证、令牌刷新、多角色选择、启动注入与注入器校验下载。
-- 实例内容管理：分页查看并管理 mods（可禁用/启用 .jar）、shaderpacks、resourcepacks、saves（解析 `level.dat` 显示世界名与最后游玩时间）、screenshots（缩略图与预览）、schematics（投影原理图，支持导入）；可直接编辑 `servers.dat` 服务器列表与 `options.txt` / `config/` 文本配置，改动前自动备份（详见上方 0.6.1 更新内容）。
+- 实例内容管理：分页查看并管理 mods（可禁用/启用 .jar，本地解析名称/版本/加载器）、shaderpacks、resourcepacks、saves（解析 `level.dat` 显示世界名与最后游玩时间）、screenshots（缩略图与预览）、schematics（投影原理图，支持导入）；可直接编辑 `servers.dat` 服务器列表与 `options.txt` / `config/` 文本配置，改动前自动备份（详见上方 0.6.1 更新内容）。
 - 更新内容页：启动器内置 `RELEASE_NOTES.md`，展示当前版本条目与历史版本，无需联网。
 
 ## 尚未实现 / 限制
@@ -60,7 +62,7 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游
 - 本机签名使用自签名证书，只在本机信任；公开信任需要 CA 证书或云签名服务。
 - CurseForge 导入/搜索需要 `console.curseforge.com` 的有效 API Key；网站 PAT 会 403。
 - 1.21.1 的本地 asset index 与 JSON 声明不一致时，严格校验会重新下载；这是预期行为。
-- 内容管理仅做本地文件操作，不联网识别模组元数据（文件名即显示名），也不解析模组依赖；截图缩略图先加载前 80 张，其余需单独点开；配置编辑限文本文件（≤1 MB），`servers.dat` 的图标随原文件读写但不提供图形化设置。
+- 内容管理仅做本地文件操作：模组元数据取自 jar 自带清单（解析失败的仍显示文件名），不解析模组依赖；截图缩略图先加载前 80 张，其余需单独点开；配置编辑限文本文件（≤1 MB），`servers.dat` 的图标随原文件读写但不提供图形化设置。
 
 ## 启动原理
 

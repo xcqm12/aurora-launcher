@@ -3157,6 +3157,7 @@ pub fn run() {
             content::instance_content_open_folder,
             content::instance_content_upload,
             content::instance_mod_toggle,
+            content::instance_mod_metadata,
             content::instance_image_preview,
             content::instance_save_open,
             content::instance_server_list,

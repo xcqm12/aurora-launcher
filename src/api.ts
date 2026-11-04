@@ -244,6 +244,14 @@ export type ChangelogEntry = {
   items: string[];
 };
 export type Changelog = { version: string; entries: ChangelogEntry[] };
+
+export type ModMeta = {
+  title?: string | null;
+  version?: string | null;
+  mod_id?: string | null;
+  loader?: string | null;
+  description?: string | null;
+};
 export type ImportResult = {
   kind: string;
   name: string;
@@ -374,6 +382,8 @@ export const api = {
   pickContentFile: (kind: ContentKind) => invoke<string | null>("pick_content_file", { kind }),
   modToggle: (instanceId: string, name: string, enable: boolean) =>
     invoke<void>("instance_mod_toggle", { instanceId, name, enable }),
+  modMetadata: (instanceId: string) =>
+    invoke<Record<string, ModMeta>>("instance_mod_metadata", { instanceId }),
   imagePreview: (instanceId: string, kind: ContentKind, name: string) =>
     invoke<string>("instance_image_preview", { instanceId, kind, name }),
   saveOpen: (instanceId: string, name: string) =>

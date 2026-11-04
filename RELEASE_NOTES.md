@@ -9,6 +9,9 @@
   - 服务器：直接读写 `servers.dat`（gzip + NBT），可改名称/地址、设置隐藏、增删条目；保存前自动备份（保留最近 3 份 `servers.dat.aurora-bak-*`）。
   - 配置：编辑 `options.txt` 与 `config/` 下的文本文件（≤1 MB），支持搜索与新建，保存时生成 `*.aurora-bak-*` 备份。
 - 安全边界：内容操作按实例根目录做路径规范化校验（拒绝 `..` 与绝对路径）；删除世界/目录需二次确认；配置写入限制在 `options.txt` 与 `config/` 子树。
+- 模组元数据：本地读取 jar 内的 `fabric.mod.json` / `quilt.mod.json` / `META-INF/mods.toml` / `mcmod.info`，显示真实名称、版本与加载器标签（不联网，按文件大小与修改时间缓存）。
+- 内容搜索与配置编辑：各内容页支持关键字过滤（模组可按名称/ID/版本搜）；配置编辑器切换文件前会提示未保存改动，支持 Ctrl+S 保存。
+- 截图预览支持 ←/→ 切换与 Esc 关闭。
 - 修复：模组启停不再把文件名整体转小写（此前 `JEI-1.20.jar` 会变成 `jei-1.20.jar.disabled`）。
 
 # Aurora Launcher v0.6.0（历史）

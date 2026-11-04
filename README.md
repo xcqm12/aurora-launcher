@@ -1,6 +1,19 @@
 # Aurora Launcher
 
-Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游戏启动与加载器自动安装、微软正版/LittleSkin/离线登录、整合包导入导出、镜像加速、EasyTier 联机。历史版本更新记录见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
+Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游戏启动与加载器自动安装、微软正版/LittleSkin/离线登录、整合包导入导出、实例内容管理、镜像加速、EasyTier 联机。历史版本更新记录见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
+
+## 未发布（下一版）
+
+- **实例内容管理**：实例管理弹窗改为分页布局，新增 8 个内容页，与原有「设置」页并列（标签上显示数量角标）：
+  - **模组**：列出 `mods/` 下的 .jar，可一键禁用/启用（重命名为 `.jar.disabled`，文件名大小写保持不变）、删除；文件夹也会列出但不能启停。
+  - **光影包 / 资源包**：列表、删除、从磁盘导入 `.zip`，并可直接打开对应目录。
+  - **存档**：读取每个世界的 `level.dat`，显示世界名、目录名、占用空间与最后游玩时间，可打开世界目录或删除。
+  - **截图**：缩略图墙（分批加载，最多先加载 80 张），点击查看大图，支持单张删除。
+  - **原理图**：列出 `.litematic` / `.schem` / `.schematic` / `.nbt`，支持导入与删除。
+  - **服务器**：直接读写 `servers.dat`（gzip + NBT），可修改名称/地址、设置隐藏、增删条目并保存；保存前自动备份原文件（`servers.dat.aurora-bak-<时间戳>`，只保留最近 3 份）。
+  - **配置**：编辑实例根目录的 `options.txt` 与 `config/` 目录树下的文本文件（txt/json/toml/cfg/properties/yml 等，单个 ≤1 MB），支持搜索与新建；保存时生成 `*.aurora-bak-<时间戳>` 备份。
+- 安全边界：所有内容操作都按实例根目录做路径规范化校验（拒绝 `..` 与绝对路径），删除目录/世界需二次确认，配置写入只允许 `options.txt` 与 `config/` 子树。
+- 实现：新增后端模块 `src-tauri/src/content.rs`（自带最小 NBT 解析/编码器，gzip 走 `flate2`），注册 15 个命令；新增 NBT 往返、路径穿越拒绝与启停命名的单元测试。
 
 ## 0.6.0 更新内容
 
@@ -35,7 +48,7 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游
 - Modrinth / CurseForge 资源搜索与校验安装（流式下载 + 实时进度）；CurseForge 密钥 DPAPI 保存，不进入日志和前端。
 - EasyTier 联机：创建/加入房间、房间码、虚拟 IP 展示、日志面板（实验功能，见“联机”章节）。
 - LittleSkin（Yggdrasil + authlib-injector）登录：账户/密码验证、令牌刷新、多角色选择、启动注入与注入器校验下载。
-- 实例内容管理：实例管理弹窗分页查看 mods（可禁用/启用 .jar）、shaderpacks、resourcepacks、saves（解析 level.dat 显示世界名与最后游玩时间）、screenshots（缩略图与预览）、schematics（投影原理图，支持导入）；直接编辑 servers.dat 服务器列表与 options.txt / config/ 文本配置，改动前自动备份（servers.dat.aurora-bak-*、*.aurora-bak-*）。
+- 实例内容管理：分页查看并管理 mods（可禁用/启用 .jar）、shaderpacks、resourcepacks、saves（解析 `level.dat` 显示世界名与最后游玩时间）、screenshots（缩略图与预览）、schematics（投影原理图，支持导入）；可直接编辑 `servers.dat` 服务器列表与 `options.txt` / `config/` 文本配置，改动前自动备份（详见“未发布”一节）。
 
 ## 尚未实现 / 限制
 
@@ -45,6 +58,7 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游
 - 本机签名使用自签名证书，只在本机信任；公开信任需要 CA 证书或云签名服务。
 - CurseForge 导入/搜索需要 `console.curseforge.com` 的有效 API Key；网站 PAT 会 403。
 - 1.21.1 的本地 asset index 与 JSON 声明不一致时，严格校验会重新下载；这是预期行为。
+- 内容管理仅做本地文件操作，不联网识别模组元数据（文件名即显示名），也不解析模组依赖；截图缩略图先加载前 80 张，其余需单独点开；配置编辑限文本文件（≤1 MB），`servers.dat` 的图标随原文件读写但不提供图形化设置。
 
 ## 启动原理
 
@@ -151,6 +165,8 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 13. 微软不存在可合法复用的第三方公共 Client ID：Aurora 现已内置自有 Azure 应用（2026-10-31 过 Mojang 审核），第三方启动器仍需自行注册。
 14. LiteLoader 自动安装未经真实进游戏验证：本机没有 Java 8（LiteLoader 仅支持 ≤1.12.2），下载、依赖解析与版本 JSON 构造均已按官方安装器产物校验。
 15. Forge 安装器优先走 maven.creeperhost.net，该镜像偶发坏文件（trove/mixin SHA-1 校验失败即删，安装中止）：已实现失败库解析 + BMCLAPI/Sponge/Maven Central 预下载 + 自动重试（最多 3 次）；瞬时损坏通常第二次尝试即成功。
+16. 读写 `servers.dat` / `level.dat` 需要一个最小 NBT 编解码器，自写时踩了两个坑：Compound 的字段名本身已带 u16 长度前缀（不能再多读一次长度，否则报“数据不完整”）；列表值自身的标签是 `TAG_List(9)`，而不是元素的标签类型（写错会把列表编码成 Compound）。已加 NBT 往返测试覆盖。
+17. 模组启停最初按小写文件名重命名，会把 `JEI-1.20.jar` 变成 `jei-1.20.jar.disabled`：改为忽略大小写匹配后缀、保留原文件名（禁用只追加 `.disabled`，启用只去掉 `.disabled`），并加大小写保持测试。
 
 ## 发布
 

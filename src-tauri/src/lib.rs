@@ -1,5 +1,6 @@
 mod ai;
 mod auth;
+mod changelog;
 mod content;
 mod launch;
 mod loaders;
@@ -3163,7 +3164,9 @@ pub fn run() {
             content::instance_config_list,
             content::instance_config_read,
             content::instance_config_write,
-            pick_content_file
-        ])        .run(tauri::generate_context!())
+            pick_content_file,
+            changelog::app_changelog
+        ])
+        .run(tauri::generate_context!())
         .expect("error while running Aurora Launcher");
 }

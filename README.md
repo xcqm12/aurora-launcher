@@ -13,7 +13,8 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游
   - **服务器**：直接读写 `servers.dat`（gzip + NBT），可修改名称/地址、设置隐藏、增删条目并保存；保存前自动备份原文件（`servers.dat.aurora-bak-<时间戳>`，只保留最近 3 份）。
   - **配置**：编辑实例根目录的 `options.txt` 与 `config/` 目录树下的文本文件（txt/json/toml/cfg/properties/yml 等，单个 ≤1 MB），支持搜索与新建；保存时生成 `*.aurora-bak-<时间戳>` 备份。
 - 安全边界：所有内容操作都按实例根目录做路径规范化校验（拒绝 `..` 与绝对路径），删除目录/世界需二次确认，配置写入只允许 `options.txt` 与 `config/` 子树。
-- 实现：新增后端模块 `src-tauri/src/content.rs`（自带最小 NBT 解析/编码器，gzip 走 `flate2`），注册 15 个命令；新增 NBT 往返、路径穿越拒绝与启停命名的单元测试。
+- **更新内容页**：侧边栏新增「更新内容」，用 `include_str!` 把仓库的 `RELEASE_NOTES.md` 编译进程序（安装后不依赖仓库目录），展示当前版本的更新条目并支持展开历史版本；发版时改 `RELEASE_NOTES.md` 重新构建即可同步。
+- 实现：新增后端模块 `src-tauri/src/content.rs`（自带最小 NBT 解析/编码器，gzip 走 `flate2`）与 `src-tauri/src/changelog.rs`，注册 16 个命令；新增 NBT 往返、路径穿越拒绝、启停命名与更新日志解析的单元测试。
 
 ## 0.6.0 更新内容（历史）
 
@@ -49,6 +50,7 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游
 - EasyTier 联机：创建/加入房间、房间码、虚拟 IP 展示、日志面板（实验功能，见“联机”章节）。
 - LittleSkin（Yggdrasil + authlib-injector）登录：账户/密码验证、令牌刷新、多角色选择、启动注入与注入器校验下载。
 - 实例内容管理：分页查看并管理 mods（可禁用/启用 .jar）、shaderpacks、resourcepacks、saves（解析 `level.dat` 显示世界名与最后游玩时间）、screenshots（缩略图与预览）、schematics（投影原理图，支持导入）；可直接编辑 `servers.dat` 服务器列表与 `options.txt` / `config/` 文本配置，改动前自动备份（详见上方 0.6.1 更新内容）。
+- 更新内容页：启动器内置 `RELEASE_NOTES.md`，展示当前版本条目与历史版本，无需联网。
 
 ## 尚未实现 / 限制
 

@@ -236,6 +236,14 @@ export type ServerInput = {
 
 export type ConfigEntry = { path: string; size: number; modified: number };
 export type ConfigFile = { path: string; content: string };
+
+export type ChangelogEntry = {
+  version: string;
+  current: boolean;
+  history: boolean;
+  items: string[];
+};
+export type Changelog = { version: string; entries: ChangelogEntry[] };
 export type ImportResult = {
   kind: string;
   name: string;
@@ -378,4 +386,5 @@ export const api = {
     invoke<ConfigFile>("instance_config_read", { instanceId, path }),
   configWrite: (instanceId: string, path: string, content: string) =>
     invoke<void>("instance_config_write", { instanceId, path, content }),
+  changelog: () => invoke<Changelog>("app_changelog"),
 };

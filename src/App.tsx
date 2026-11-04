@@ -28,6 +28,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  ScrollText,
   Search,
   Server as ServerIcon,
   Settings2,
@@ -43,6 +44,8 @@ import {
   AppInfo,
   DeviceCode,
   AppSettings,
+  Changelog,
+  ChangelogEntry,
   ConfigEntry,
   ContentItem,
   ContentKind,
@@ -64,7 +67,7 @@ import {
   AiSettingsView,
 } from "./api";
 
-type View = "home" | "browse" | "instances" | "loaders" | "settings";
+type View = "home" | "browse" | "instances" | "loaders" | "settings" | "changelog";
 type ResourceKind = "mod" | "modpack" | "datapack" | "resourcepack" | "shader" | "world";
 type LoaderId =
   | "vanilla"
@@ -294,6 +297,7 @@ function App() {
     instances: "游戏实例",
     loaders: `${loaderLabel(loaderFocus)} 安装`,
     settings: "设置",
+    changelog: "更新内容",
   };
 
   return (
@@ -355,6 +359,12 @@ function App() {
             label="游戏实例"
             count={instances.length}
             onClick={() => setView("instances")}
+          />
+          <SideButton
+            active={view === "changelog"}
+            icon={ScrollText}
+            label="更新内容"
+            onClick={() => setView("changelog")}
           />
           <SideButton
             active={view === "settings"}
@@ -483,6 +493,10 @@ function App() {
             onCreate={() => setShowCreate(true)}
             onRefresh={refreshInstances}
           />
+        )}
+
+        {view === "changelog" && (
+          <ChangelogPage currentVersion={info?.version ?? ""} onNotice={setNotice} />
         )}
 
         {view === "settings" && (
@@ -3846,6 +3860,121 @@ function SettingsPage({
           <strong>{info?.region_locked ? "当前发行版已限制下载" : "无限制"}</strong>
         </div>
       </section>
+    </div>
+  );
+}
+
+function ChangelogPage({
+  currentVersion,
+  onNotice,
+}: {
+  currentVersion: string;
+  onNotice: (message: string) => void;
+}) {
+  const [data, setData] = useState<Changelog | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+
+  useEffect(() => {
+    api
+      .changelog()
+      .then(setData)
+      .catch((error) => {
+        setData(null);
+        onNotice(String(error));
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const current = data?.entries.find((entry) => entry.current) ?? data?.entries[0];
+  const history = data?.entries.filter((entry) => entry !== current) ?? [];
+
+  const renderItems = (entry: ChangelogEntry) => {
+    // 把 `path` 形式渲染成行内代码，保持更新日志里的路径可读。
+    const renderText = (text: string) =>
+      text.split(/(`[^`]+`)/g).map((part, index) =>
+        part.startsWith("`") && part.endsWith("`") && part.length > 2 ? (
+          <code key={index}>{part.slice(1, -1)}</code>
+        ) : (
+          <span key={index}>{part}</span>
+        ),
+      );
+
+    return (
+      <ul className="changelog-list">
+        {entry.items.map((item, index) => {
+          const lines = item.split("\n");
+          const head = lines[0];
+          const children = lines.slice(1).map((line) => line.replace(/^· /, ""));
+          return (
+            <li key={index}>
+              {renderText(head)}
+              {children.length > 0 && (
+                <ul className="changelog-sub">
+                  {children.map((child, childIndex) => (
+                    <li key={childIndex}>{renderText(child)}</li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    );
+  };
+
+  return (
+    <div className="page-stack">
+      <section className="section-heading">
+        <div>
+          <span className="eyebrow">RELEASE NOTES</span>
+          <h3>{currentVersion ? `Aurora Launcher ${currentVersion}` : "更新内容"}</h3>
+          <p className="section-subtitle">
+            更新说明随版本内置在启动器中，与仓库里的 RELEASE_NOTES.md 一致。
+          </p>
+        </div>
+      </section>
+
+      {data === null ? (
+        <div className="empty-state">
+          <LoaderCircle className="spin" size={22} />
+          <p>正在读取更新内容…</p>
+        </div>
+      ) : (
+        <>
+          {current && (
+            <article className="changelog-card current">
+              <header>
+                <div>
+                  <span className="pill accent mini">当前版本</span>
+                  <h4>v{current.version}</h4>
+                </div>
+                <ScrollText size={18} />
+              </header>
+              {current.items.length ? renderItems(current) : <p className="security-note">该版本没有记录条目。</p>}
+            </article>
+          )}
+
+          {history.length > 0 && (
+            <section className="changelog-history">
+              <button className="text-button" onClick={() => setShowHistory((value) => !value)}>
+                <History size={15} />
+                {showHistory ? "收起历史版本" : `查看历史版本（${history.length}）`}
+                <ChevronRight size={15} className={showHistory ? "flip" : ""} />
+              </button>
+              {showHistory &&
+                history.map((entry) => (
+                  <article className="changelog-card" key={entry.version}>
+                    <header>
+                      <h4>v{entry.version}</h4>
+                      {entry.history && <em>历史</em>}
+                    </header>
+                    {renderItems(entry)}
+                  </article>
+                ))}
+            </section>
+          )}
+        </>
+      )}
     </div>
   );
 }

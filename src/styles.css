@@ -2052,6 +2052,93 @@ button:disabled {
   border-color: #3c4d70;
 }
 
+/* ===== 更新内容 ===== */
+
+.changelog-card {
+  padding: 16px 18px;
+  border: 1px solid #233049;
+  border-radius: 14px;
+  background: #0d1524;
+}
+
+.changelog-card.current {
+  border-color: #3f6f5f;
+  background: linear-gradient(180deg, #0f1d1d, #0d1524 60%);
+}
+
+.changelog-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: #6b8497;
+}
+
+.changelog-card header h4 {
+  margin: 6px 0 0;
+  font-size: 15px;
+  color: #e9edf5;
+}
+
+.changelog-card header em {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #141d2f;
+  color: #7c8798;
+  font-size: 10.5px;
+  font-style: normal;
+}
+
+.changelog-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 7px;
+  color: #b9c6d9;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.changelog-list li::marker {
+  color: #4f9c85;
+}
+
+.changelog-sub {
+  margin: 5px 0 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 4px;
+  color: #97a5b8;
+  font-size: 12px;
+}
+
+.changelog-sub li::marker {
+  color: #3c4d70;
+}
+
+.changelog-list code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: #101a2c;
+  color: #9fd8c4;
+  font: 11.5px/1.5 var(--mono);
+}
+
+.changelog-history {
+  display: grid;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.changelog-history .text-button {
+  justify-self: start;
+}
+
+.changelog-history .text-button svg.flip {
+  transform: rotate(90deg);
+}
+
 .installer-log {
   max-height: 160px;
   overflow: auto;

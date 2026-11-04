@@ -382,8 +382,14 @@ export const api = {
   pickContentFile: (kind: ContentKind) => invoke<string | null>("pick_content_file", { kind }),
   modToggle: (instanceId: string, name: string, enable: boolean) =>
     invoke<void>("instance_mod_toggle", { instanceId, name, enable }),
+  modToggleMany: (instanceId: string, names: string[], enable: boolean) =>
+    invoke<number>("instance_mod_toggle_many", { instanceId, names, enable }),
   modMetadata: (instanceId: string) =>
     invoke<Record<string, ModMeta>>("instance_mod_metadata", { instanceId }),
+  exportWorld: (instanceId: string, name: string, path: string) =>
+    invoke<string>("instance_save_export", { instanceId, name, path }),
+  pickSaveExport: (defaultName: string) =>
+    invoke<string | null>("pick_save_export", { defaultName }),
   imagePreview: (instanceId: string, kind: ContentKind, name: string) =>
     invoke<string>("instance_image_preview", { instanceId, kind, name }),
   saveOpen: (instanceId: string, name: string) =>

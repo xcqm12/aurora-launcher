@@ -1785,6 +1785,67 @@ button:disabled {
   font-size: 10.5px;
 }
 
+.content-sort {
+  padding: 6px 8px;
+  border: 1px solid #233049;
+  border-radius: 8px;
+  background: #0a111e;
+  color: #a9b7cc;
+  font-size: 12px;
+}
+
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border: 1px solid #2b5a4c;
+  border-radius: 10px;
+  background: #0f1d1d;
+}
+
+.bulk-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #b9c6d9;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.row-check {
+  accent-color: #6bcaaa;
+  flex-shrink: 0;
+}
+
+.content-panel {
+  position: relative;
+}
+
+.content-panel.drag-target {
+  outline: 2px dashed #6bcaaa;
+  outline-offset: -4px;
+  border-radius: 10px;
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border-radius: 10px;
+  background: rgba(16, 29, 29, 0.86);
+  color: var(--accent);
+  font-size: 13px;
+  pointer-events: none;
+}
+
 .content-list {
   display: grid;
   gap: 6px;

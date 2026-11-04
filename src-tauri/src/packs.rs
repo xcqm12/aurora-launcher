@@ -518,7 +518,7 @@ pub fn import_world(
     Ok(target.display().to_string())
 }
 
-fn add_dir_to_zip(zip: &mut ZipWriter<File>, source: &Path, prefix: &str) -> Result<usize, String> {
+pub(crate) fn add_dir_to_zip(zip: &mut ZipWriter<File>, source: &Path, prefix: &str) -> Result<usize, String> {
     if !source.exists() {
         return Ok(0);
     }

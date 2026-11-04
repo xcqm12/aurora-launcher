@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   Boxes,
   Brush,
@@ -1769,14 +1770,6 @@ function InstanceManager({
       );
     });
 
-  const importWorld = () =>
-    guard("world", async () => {
-      const path = await api.pickWorldFile();
-      if (!path) return;
-      const target = await api.importWorld(instance.id, path);
-      onNotice(`世界已导入：${target}`);
-    });
-
   const exportPack = () =>
     guard("export", async () => {
       const path = await api.pickExportFile(instance.name);
@@ -1896,15 +1889,12 @@ function InstanceManager({
                 <button className="ghost-button" onClick={() => void importPack()} disabled={busy === "pack"}>
                   {busy === "pack" ? <LoaderCircle className="spin" size={15} /> : <PackageOpen size={15} />} 导入整合包
                 </button>
-                <button className="ghost-button" onClick={() => void importWorld()} disabled={busy === "world"}>
-                  {busy === "world" ? <LoaderCircle className="spin" size={15} /> : <Globe2 size={15} />} 导入世界
-                </button>
                 <button className="ghost-button" onClick={() => void exportPack()} disabled={busy === "export"}>
                   {busy === "export" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} 导出整合包
                 </button>
               </div>
               <p className="security-note">
-                支持 .mrpack 与 CurseForge zip 导入；导出为 .mrpack，本地 mod 放入 overrides/mods。
+                支持 .mrpack 与 CurseForge zip 导入；导出为 .mrpack，本地 mod 放入 overrides/mods。世界的导入/备份在「存档」页。
               </p>
             </section>
           </div>
@@ -1938,9 +1928,12 @@ function ContentPanel({
   const [items, setItems] = useState<ContentItem[] | null>(null);
   const [metas, setMetas] = useState<Record<string, ModMeta>>({});
   const [filter, setFilter] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [sort, setSort] = useState<"name" | "enabled">("name");
   const [busy, setBusy] = useState<string | null>(null);
 
   const reload = async () => {
+    setSelected(new Set());
     try {
       setItems(await api.contentList(instanceId, kind));
     } catch (error) {
@@ -1987,6 +1980,75 @@ function ContentPanel({
       onNotice(`已导入 ${name}`);
     });
 
+  // 拖拽导入：按扩展名过滤，逐个复制进对应目录。
+  const [dragging, setDragging] = useState(false);
+  const dropKinds: Record<string, string[]> = {
+    mod: [".jar"],
+    shader: [".zip"],
+    resourcepack: [".zip"],
+    schematic: [".litematic", ".schem", ".schematic", ".nbt"],
+  };
+  const dropHint = Object.entries(dropKinds)
+    .map(([id, exts]) => (id === kind ? exts.join(" / ") : ""))
+    .filter(Boolean)[0];
+
+  const handleDrop = async (paths: string[]) => {
+    if (!paths.length) return;
+    const exts = dropKinds[kind] ?? [];
+    const matched = paths.filter((path) => exts.some((ext) => path.toLowerCase().endsWith(ext)));
+    const rejected = paths.length - matched.length;
+    if (!matched.length) {
+      onNotice(`拖入的文件类型不支持，需要 ${exts.join(" / ")}`);
+      return;
+    }
+    setBusy("drop");
+    let imported = 0;
+    const errors: string[] = [];
+    for (const path of matched) {
+      try {
+        await api.contentUpload(instanceId, kind, path);
+        imported += 1;
+      } catch (error) {
+        errors.push(String(error));
+      }
+    }
+    await reload();
+    onChanged();
+    setBusy(null);
+    const parts: string[] = [];
+    if (imported) parts.push(`已导入 ${imported} 个文件`);
+    if (rejected) parts.push(`${rejected} 个类型不符已忽略`);
+    if (errors.length) parts.push(`失败 ${errors.length}：${errors[0]}`);
+    onNotice(parts.join("；"));
+  };
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let active = true;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const payload = event.payload;
+        if (payload.type === "enter" || payload.type === "over") {
+          setDragging(true);
+        } else if (payload.type === "leave") {
+          setDragging(false);
+        } else if (payload.type === "drop") {
+          setDragging(false);
+          void handleDrop(payload.paths);
+        }
+      })
+      .then((fn) => {
+        if (!active) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId, kind]);
+
   const labels: Record<string, string> = {
     mod: "模组",
     shader: "光影包",
@@ -1996,16 +2058,61 @@ function ContentPanel({
   const folder = { mod: "mods", shader: "shaderpacks", resourcepack: "resourcepacks", schematic: "schematics" }[kind];
 
   const keyword = filter.trim().toLowerCase();
-  const shown = (items ?? []).filter((item) => {
-    if (!keyword) return true;
-    const meta = metas[item.name];
-    return [item.name, meta?.title, meta?.mod_id, meta?.version, item.level_name]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(keyword));
-  });
+  const shown = (items ?? [])
+    .filter((item) => {
+      if (!keyword) return true;
+      const meta = metas[item.name];
+      return [item.name, meta?.title, meta?.mod_id, meta?.version, item.level_name]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(keyword));
+    })
+    .slice()
+    .sort((a, b) => {
+      if (kind === "mod" && sort === "enabled") {
+        // 启用在前；同状态内按显示名排序。
+        const rank = (item: ContentItem) => (item.enabled === false ? 1 : 0);
+        const diff = rank(a) - rank(b);
+        if (diff !== 0) return diff;
+      }
+      const nameA = (metas[a.name]?.title || a.name).toLowerCase();
+      const nameB = (metas[b.name]?.title || b.name).toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+
+  const selectable = shown.filter((item) => item.enabled !== null && item.enabled !== undefined);
+  const selectedItems = selectable.filter((item) => selected.has(item.name));
+  const allSelected = selectable.length > 0 && selectedItems.length === selectable.length;
+
+  const toggleSelect = (name: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelected(allSelected ? new Set() : new Set(selectable.map((item) => item.name)));
+  };
+
+  const bulkToggle = (enable: boolean) =>
+    withBusy(setBusy, "bulk", async () => {
+      if (!selectedItems.length) return;
+      const changed = await api.modToggleMany(instanceId, selectedItems.map((item) => item.name), enable);
+      await reload();
+      onChanged();
+      onNotice(`${enable ? "启用" : "禁用"}了 ${changed} 个模组`);
+    });
 
   return (
-    <div className="content-panel manager-scroll">
+    <div className={`content-panel manager-scroll ${dragging ? "drag-target" : ""}`}>
+      {dragging && (
+        <div className="drop-overlay">
+          <Download size={22} />
+          <span>松开导入到 {labels[kind]}（{dropHint}）</span>
+        </div>
+      )}
       <div className="content-toolbar">
         <span className="content-hint">
           {labels[kind]} · {keyword ? `${shown.length}/${items?.length ?? 0}` : (items?.length ?? "…")} 项 · 位于 {folder}/
@@ -2017,6 +2124,17 @@ function ContentPanel({
             onChange={(event) => setFilter(event.target.value)}
             placeholder={`搜索${labels[kind]}…`}
           />
+          {kind === "mod" && (
+            <select
+              className="content-sort"
+              value={sort}
+              onChange={(event) => setSort(event.target.value as "name" | "enabled")}
+              title="排序方式"
+            >
+              <option value="name">按名称</option>
+              <option value="enabled">启用优先</option>
+            </select>
+          )}
           {(kind === "shader" || kind === "resourcepack" || kind === "schematic") && (
             <button className="ghost-button" onClick={() => void upload()} disabled={busy === "upload"}>
               {busy === "upload" ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />} 导入文件
@@ -2030,6 +2148,32 @@ function ContentPanel({
           </button>
         </div>
       </div>
+
+      {kind === "mod" && selectable.length > 0 && (
+        <div className="bulk-bar">
+          <label className="bulk-select-all">
+            <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} />
+            已选 {selectedItems.length}/{selectable.length}
+          </label>
+          <div className="manager-actions">
+            <button
+              className="ghost-button small"
+              disabled={!selectedItems.length || busy === "bulk"}
+              onClick={() => void bulkToggle(true)}
+            >
+              <Eye size={14} /> 批量启用
+            </button>
+            <button
+              className="ghost-button small"
+              disabled={!selectedItems.length || busy === "bulk"}
+              onClick={() => void bulkToggle(false)}
+            >
+              <EyeOff size={14} /> 批量禁用
+            </button>
+            {busy === "bulk" && <LoaderCircle className="spin" size={15} />}
+          </div>
+        </div>
+      )}
 
       {items === null ? (
         <div className="content-empty">正在读取…</div>
@@ -2046,6 +2190,14 @@ function ContentPanel({
               .join(" · ");
             return (
               <div className={`content-row ${disabledMod ? "disabled" : ""}`} key={item.name}>
+                {kind === "mod" && item.enabled !== null && item.enabled !== undefined && (
+                  <input
+                    type="checkbox"
+                    className="row-check"
+                    checked={selected.has(item.name)}
+                    onChange={() => toggleSelect(item.name)}
+                  />
+                )}
                 <div className="content-main">
                   <span className="content-name" title={meta?.description || item.name}>
                     {title}
@@ -2126,11 +2278,96 @@ function SavesPanel({
       onNotice("世界已删除");
     });
 
+  // 导入与“还原备份”是同一操作：把世界 zip 解到 saves/ 下。
+  const importWorld = () =>
+    withBusy(setBusy, "import", async () => {
+      const path = await api.pickWorldFile();
+      if (!path) return;
+      const target = await api.importWorld(instanceId, path);
+      await reload();
+      onChanged();
+      onNotice(`世界已导入：${target}`);
+    });
+
+  const backup = (item: ContentItem) =>
+    withBusy(setBusy, `backup:${item.name}`, async () => {
+      const path = await api.pickSaveExport(item.level_name || item.name);
+      if (!path) return;
+      const detail = await api.exportWorld(instanceId, item.name, path);
+      onNotice(`已备份到 ${path}（${detail}）`);
+    });
+
+  const [dragging, setDragging] = useState(false);
+
+  // 拖入世界 zip 视为导入/还原备份。
+  const handleDrop = async (paths: string[]) => {
+    if (!paths.length) return;
+    const zips = paths.filter((path) => path.toLowerCase().endsWith(".zip"));
+    if (!zips.length) {
+      onNotice("请拖入 .zip 世界压缩包");
+      return;
+    }
+    setBusy("import");
+    let imported = 0;
+    const errors: string[] = [];
+    for (const path of zips) {
+      try {
+        await api.importWorld(instanceId, path);
+        imported += 1;
+      } catch (error) {
+        errors.push(String(error));
+      }
+    }
+    await reload();
+    onChanged();
+    setBusy(null);
+    const parts: string[] = [];
+    if (imported) parts.push(`已导入 ${imported} 个世界`);
+    if (errors.length) parts.push(`失败 ${errors.length}：${errors[0]}`);
+    onNotice(parts.join("；"));
+  };
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let active = true;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const payload = event.payload;
+        if (payload.type === "enter" || payload.type === "over") {
+          setDragging(true);
+        } else if (payload.type === "leave") {
+          setDragging(false);
+        } else if (payload.type === "drop") {
+          setDragging(false);
+          void handleDrop(payload.paths);
+        }
+      })
+      .then((fn) => {
+        if (!active) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId]);
+
   return (
-    <div className="content-panel manager-scroll">
+    <div className={`content-panel manager-scroll ${dragging ? "drag-target" : ""}`}>
+      {dragging && (
+        <div className="drop-overlay">
+          <Download size={22} />
+          <span>松开导入世界（.zip）</span>
+        </div>
+      )}
       <div className="content-toolbar">
         <span className="content-hint">存档 · {items?.length ?? "…"} 个世界 · 位于 saves/</span>
         <div className="manager-actions">
+          <button className="ghost-button" onClick={() => void importWorld()} disabled={busy === "import"}>
+            {busy === "import" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} 导入 / 还原备份
+          </button>
           <button className="ghost-button" onClick={() => void reload()}>
             <RefreshCw size={15} /> 刷新
           </button>
@@ -2143,7 +2380,7 @@ function SavesPanel({
       {items === null ? (
         <div className="content-empty">正在读取…</div>
       ) : items.length === 0 ? (
-        <div className="content-empty">暂无存档</div>
+        <div className="content-empty">暂无存档，可点「导入 / 还原备份」放入世界 zip</div>
       ) : (
         <div className="content-list">
           {items.map((item) => (
@@ -2158,6 +2395,18 @@ function SavesPanel({
                 </span>
               </div>
               <div className="content-actions">
+                <button
+                  className="ghost-button small"
+                  onClick={() => void backup(item)}
+                  disabled={busy === `backup:${item.name}`}
+                >
+                  {busy === `backup:${item.name}` ? (
+                    <LoaderCircle className="spin" size={14} />
+                  ) : (
+                    <Download size={14} />
+                  )}{" "}
+                  备份
+                </button>
                 <button className="ghost-button small" onClick={() => void api.saveOpen(instanceId, item.name)}>
                   <FolderOpen size={14} /> 打开
                 </button>

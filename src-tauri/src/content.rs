@@ -823,23 +823,71 @@ pub(crate) fn instance_mod_toggle(
 ) -> Result<(), String> {
     let root = instance_root(&app, &instance_id)?;
     let dir = kind_dir(&root, "mod")?;
-    let source = resolve_inside(&dir, &name)?;
+    toggle_one(&dir, &name, enable)
+}
+
+fn toggle_one(dir: &Path, name: &str, enable: bool) -> Result<(), String> {
+    let source = resolve_inside(dir, name)?;
     if source.is_dir() {
         return Err("文件夹不能启停".into());
     }
-    let target_name = toggle_name(&name, enable).ok_or_else(|| {
+    let target_name = toggle_name(name, enable).ok_or_else(|| {
         if enable {
             "文件未处于禁用状态".to_string()
         } else {
             "只有 .jar 文件可以禁用".to_string()
         }
     })?;
-    fs::rename(&source, dir.join(&target_name)).map_err(|e| format!("重命名失败：{e}"))
+    // 已处于目标状态的文件跳过，便于批量操作时直接全选。
+    let target = dir.join(&target_name);
+    if target.exists() && target != source {
+        return Err(format!("目标已存在：{target_name}"));
+    }
+    fs::rename(&source, target).map_err(|e| format!("重命名失败：{e}"))
+}
+
+#[tauri::command]
+pub(crate) fn instance_mod_toggle_many(
+    app: tauri::AppHandle,
+    instance_id: String,
+    names: Vec<String>,
+    enable: bool,
+) -> Result<usize, String> {
+    let root = instance_root(&app, &instance_id)?;
+    let dir = kind_dir(&root, "mod")?;
+    if names.len() > 2000 {
+        return Err("一次最多处理 2000 个文件".into());
+    }
+    let mut changed = 0;
+    let mut skipped = 0;
+    let mut failures: Vec<String> = Vec::new();
+    for name in &names {
+        match toggle_one(&dir, name, enable) {
+            Ok(()) => changed += 1,
+            // 名称未带目标后缀说明本来就处于目标状态，算跳过而不是失败。
+            Err(error) if error.starts_with("文件未处于") || error.starts_with("只有 .jar") => {
+                skipped += 1;
+            }
+            Err(error) => failures.push(format!("{name}：{error}")),
+        }
+    }
+    if !failures.is_empty() {
+        let detail = failures.iter().take(5).cloned().collect::<Vec<_>>().join("；");
+        return Err(format!(
+            "{detail}{}",
+            if failures.len() > 5 {
+                format!("；等 {} 个文件失败", failures.len())
+            } else {
+                String::new()
+            }
+        ));
+    }
+    let _ = skipped;
+    Ok(changed)
 }
 
 /// 生成启停后的文件名：只忽略大小写地匹配后缀，保留原文件名的其余部分。
-fn toggle_name(name: &str, enable: bool) -> Option<String> {
-    let lower = name.to_lowercase();
+fn toggle_name(name: &str, enable: bool) -> Option<String> {    let lower = name.to_lowercase();
     if enable {
         if !lower.ends_with(".jar.disabled") {
             return None;
@@ -1037,6 +1085,34 @@ fn safe_display_name(path: &Path) -> Option<String> {
         return None;
     }
     Some(name)
+}
+
+/// 把 saves/<name> 打包成 zip（备份/分享用），zip 内保留世界目录名。
+#[tauri::command]
+pub(crate) fn instance_save_export(
+    app: tauri::AppHandle,
+    instance_id: String,
+    name: String,
+    path: String,
+) -> Result<String, String> {
+    let root = instance_root(&app, &instance_id)?;
+    let dir = kind_dir(&root, "save")?;
+    let source = resolve_inside(&dir, &name)?;
+    if !source.is_dir() {
+        return Err("世界目录不存在".into());
+    }
+    let target = PathBuf::from(&path);
+    if let Some(parent) = target.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|e| format!("无法创建目录：{e}"))?;
+        }
+    }
+    let file = fs::File::create(&target).map_err(|e| format!("无法创建文件：{e}"))?;
+    let mut zip = zip::ZipWriter::new(file);
+    let prefix = format!("{}/", name);
+    let count = crate::packs::add_dir_to_zip(&mut zip, &source, &prefix)?;
+    zip.finish().map_err(|e| format!("写入 zip 失败：{e}"))?;
+    Ok(format!("{count} 个文件"))
 }
 
 #[tauri::command]
@@ -1426,6 +1502,30 @@ mod tests {
         assert_eq!(legacy.title.as_deref(), Some("Old Mod"));
         assert_eq!(legacy.mod_id.as_deref(), Some("old"));
         assert_eq!(legacy.loader.as_deref(), Some("forge"));
+    }
+
+    #[test]
+    fn toggle_one_renames_on_disk() {
+        let temp = std::env::temp_dir().join(format!("aurora-mod-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).unwrap();
+        for name in ["Sodium.jar", "JEI.jar.disabled"] {
+            fs::write(temp.join(name), b"jar").unwrap();
+        }
+        // 禁用 → 追加 .disabled，文件名大小写不变。
+        toggle_one(&temp, "Sodium.jar", false).unwrap();
+        assert!(temp.join("Sodium.jar.disabled").exists());
+        assert!(!temp.join("Sodium.jar").exists());
+        // 启用 → 去掉 .disabled。
+        toggle_one(&temp, "JEI.jar.disabled", true).unwrap();
+        assert!(temp.join("JEI.jar").exists());
+        // 已处于目标状态时返回可识别的错误，供批量操作按“跳过”处理。
+        let error = toggle_one(&temp, "JEI.jar", true).unwrap_err();
+        assert!(error.starts_with("文件未处于"), "{error}");
+        // 目录不能启停。
+        fs::create_dir_all(temp.join("folder.jar")).unwrap();
+        assert!(toggle_one(&temp, "folder.jar", false).is_err());
+        let _ = fs::remove_dir_all(&temp);
     }
 
     #[test]

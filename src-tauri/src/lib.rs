@@ -2774,6 +2774,16 @@ fn pick_java_file() -> Option<String> {
 }
 
 #[tauri::command]
+fn pick_save_export(default_name: String) -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title("备份世界")
+        .add_filter("世界压缩包", &["zip"])
+        .set_file_name(format!("{default_name}.zip"))
+        .save_file()
+        .map(|path| path.display().to_string())
+}
+
+#[tauri::command]
 fn pick_content_file(kind: String) -> Option<String> {
     let (title, extensions): (&str, &[&str]) = match kind.as_str() {
         "shader" => ("光影包", &["zip"]),
@@ -3157,7 +3167,9 @@ pub fn run() {
             content::instance_content_open_folder,
             content::instance_content_upload,
             content::instance_mod_toggle,
+            content::instance_mod_toggle_many,
             content::instance_mod_metadata,
+            content::instance_save_export,
             content::instance_image_preview,
             content::instance_save_open,
             content::instance_server_list,
@@ -3166,6 +3178,7 @@ pub fn run() {
             content::instance_config_read,
             content::instance_config_write,
             pick_content_file,
+            pick_save_export,
             changelog::app_changelog
         ])
         .run(tauri::generate_context!())

@@ -822,22 +822,35 @@ pub(crate) fn instance_mod_toggle(
     let root = instance_root(&app, &instance_id)?;
     let dir = kind_dir(&root, "mod")?;
     let source = resolve_inside(&dir, &name)?;
-    let lower = name.to_lowercase();
-    let target_name = if enable {
-        lower
-            .strip_suffix(".jar.disabled")
-            .map(|base| format!("{base}.jar"))
-            .ok_or_else(|| "文件未处于禁用状态".to_string())?
-    } else {
-        lower
-            .strip_suffix(".jar")
-            .map(|base| format!("{base}.jar.disabled"))
-            .ok_or_else(|| "只有 .jar 文件可以禁用".to_string())?
-    };
     if source.is_dir() {
         return Err("文件夹不能启停".into());
     }
+    let target_name = toggle_name(&name, enable).ok_or_else(|| {
+        if enable {
+            "文件未处于禁用状态".to_string()
+        } else {
+            "只有 .jar 文件可以禁用".to_string()
+        }
+    })?;
     fs::rename(&source, dir.join(&target_name)).map_err(|e| format!("重命名失败：{e}"))
+}
+
+/// 生成启停后的文件名：只忽略大小写地匹配后缀，保留原文件名的其余部分。
+fn toggle_name(name: &str, enable: bool) -> Option<String> {
+    let lower = name.to_lowercase();
+    if enable {
+        if !lower.ends_with(".jar.disabled") {
+            return None;
+        }
+        // 去掉尾部 .disabled 即可，原 .JAR 的大小写保持不变。
+        let prefix = name.get(..name.len().checked_sub(".disabled".len())?)?;
+        Some(prefix.to_string())
+    } else {
+        if !lower.ends_with(".jar") {
+            return None;
+        }
+        Some(format!("{name}.disabled"))
+    }
 }
 
 #[tauri::command]
@@ -1110,17 +1123,23 @@ mod tests {
 
     #[test]
     fn mod_toggle_names() {
-        let lower = "foo.jar".to_lowercase();
+        assert_eq!(toggle_name("foo.jar", false), Some("foo.jar.disabled".into()));
+        assert_eq!(toggle_name("foo.jar.disabled", true), Some("foo.jar".into()));
+        // 大小写必须保留，否则重命名会改变模组文件名。
         assert_eq!(
-            lower.strip_suffix(".jar").map(|base| format!("{base}.jar.disabled")),
-            Some("foo.jar.disabled".into())
+            toggle_name("JEI-1.20.1-Fabric.jar", false),
+            Some("JEI-1.20.1-Fabric.jar.disabled".into())
         );
-        let lower = "foo.jar.disabled".to_lowercase();
         assert_eq!(
-            lower
-                .strip_suffix(".jar.disabled")
-                .map(|base| format!("{base}.jar")),
-            Some("foo.jar".into())
+            toggle_name("Sodium-0.5.jar.disabled", true),
+            Some("Sodium-0.5.jar".into())
         );
+        // 后缀大小写不敏感，但仍然只改后缀。
+        assert_eq!(toggle_name("Mod.JAR", false), Some("Mod.JAR.disabled".into()));
+        assert_eq!(toggle_name("Mod.JAR.disabled", true), Some("Mod.JAR".into()));
+        // 非 jar 与已启用/已禁用的错误状态。
+        assert_eq!(toggle_name("readme.txt", false), None);
+        assert_eq!(toggle_name("foo.jar", true), None);
+        assert_eq!(toggle_name("foo.jar.disabled", false), None);
     }
 }

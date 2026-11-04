@@ -126,10 +126,10 @@ sha256sum -c SHA256SUMS.txt
 现实限制：
 
 - 自签名证书只在安装了该证书的电脑上显示可信，其他电脑仍会提示“未知发布者”，也不会积累 SmartScreen 信誉；面向公众分发需要购买 OV/EV 代码签名证书。
-- 仓库未配置 `WINDOWS_CERT_PFX_BASE64` / `WINDOWS_CERT_PASSWORD`，CI 产物默认未签名。发布流程是：本地构建 standard/cn → 签名 → `gh release upload --clobber` 覆盖 CI 资产 → 重新生成并上传 `SHA256SUMS.txt`。
-- Tauri 的 NSIS 卸载器在安装时生成，当前签名覆盖安装包与主程序，卸载器没有签名。
+- CI 已配置 `WINDOWS_CERT_PFX_BASE64` / `WINDOWS_CERT_PASSWORD`（2026-11-04 起）：tag 构建自动签名，Release 的 `SHA256SUMS.txt` 由签名后的产物生成，发布时不再需要本地签名覆盖（本地签名仅作 Secrets 失效时的兜底）。
+- Tauri 的 NSIS 卸载器在安装时生成，签名覆盖安装包与主程序，卸载器没有签名。
 
-CI：配置 `WINDOWS_CERT_PFX_BASE64` 与 `WINDOWS_CERT_PASSWORD` Secrets 后自动签名 EXE 与 NSIS；未配置时构建仍成功但未签名。
+CI：`WINDOWS_CERT_PFX_BASE64` 与 `WINDOWS_CERT_PASSWORD` Secrets 已配置，构建自动签名 4 个 exe；密钥更新方式是重新导出 PFX 后 `gh secret set` 覆盖。证书 2027-10-22 到期，续期后同样操作。
 
 ## 锁区网关
 

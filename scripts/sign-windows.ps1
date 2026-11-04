@@ -37,10 +37,20 @@ foreach ($file in $Path) {
     if ($LASTEXITCODE -ne 0) {
         throw "签名失败：$file"
     }
-    & $signtool.FullName verify /pa $file
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "已签名但证书链不受公开信任：$file"
+    # verify /pa 检查公开信任链：自签名证书在未导入根证书的机器（如 CI runner）
+    # 上必然返回非零，这属于预期，只警告不失败。
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $null = & $signtool.FullName verify /pa $file 2>&1
+    $verifyExit = $LASTEXITCODE
+    $ErrorActionPreference = $previousPreference
+    if ($verifyExit -ne 0) {
+        Write-Warning "已签名但证书链不受公开信任：$file（自签名证书在未导入根证书的机器上属预期）"
     } else {
         Write-Output "签名验证通过：$file"
     }
 }
+
+# pwsh -File 会把最后一条原生命令的退出码当作进程退出码；签名失败已在
+# 上方 throw，走到这里说明全部成功，显式归零避免 verify 的非零码外泄。
+exit 0

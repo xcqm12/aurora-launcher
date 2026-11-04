@@ -2,7 +2,7 @@
 
 Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游戏启动与加载器自动安装、微软正版/LittleSkin/离线登录、整合包导入导出、实例内容管理、镜像加速、EasyTier 联机。历史版本更新记录见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
-## 未发布（下一版）
+## 0.6.1 更新内容
 
 - **实例内容管理**：实例管理弹窗改为分页布局，新增 8 个内容页，与原有「设置」页并列（标签上显示数量角标）：
   - **模组**：列出 `mods/` 下的 .jar，可一键禁用/启用（重命名为 `.jar.disabled`，文件名大小写保持不变）、删除；文件夹也会列出但不能启停。
@@ -15,7 +15,7 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游
 - 安全边界：所有内容操作都按实例根目录做路径规范化校验（拒绝 `..` 与绝对路径），删除目录/世界需二次确认，配置写入只允许 `options.txt` 与 `config/` 子树。
 - 实现：新增后端模块 `src-tauri/src/content.rs`（自带最小 NBT 解析/编码器，gzip 走 `flate2`），注册 15 个命令；新增 NBT 往返、路径穿越拒绝与启停命名的单元测试。
 
-## 0.6.0 更新内容
+## 0.6.0 更新内容（历史）
 
 - **AI 伙伴（实验）**：新增游戏内 AI 伙伴。安装 Companion 模组后，伙伴随玩家自动进入世界：单机模式出现跟随实体（小七），玩家操作（挖方块、聊天、受伤、死亡、换维度）会进入它的记忆，`#ai 问题` 随时对话，它也会主动吐槽；启动器设置页可配置 OpenAI 兼容接口（默认 DeepSeek）、模型、Key 与伙伴名字，并支持对话测试。
 - **架构与安全**：模组 → 启动器本地回环服务（127.0.0.1 + 令牌鉴权）→ AI 接口，**API Key 只在 Rust 侧使用并 DPAPI 加密落盘**，不进模组配置、不进日志；启动时通过 JVM 属性注入端口/令牌/玩家名。
@@ -48,7 +48,7 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游
 - Modrinth / CurseForge 资源搜索与校验安装（流式下载 + 实时进度）；CurseForge 密钥 DPAPI 保存，不进入日志和前端。
 - EasyTier 联机：创建/加入房间、房间码、虚拟 IP 展示、日志面板（实验功能，见“联机”章节）。
 - LittleSkin（Yggdrasil + authlib-injector）登录：账户/密码验证、令牌刷新、多角色选择、启动注入与注入器校验下载。
-- 实例内容管理：分页查看并管理 mods（可禁用/启用 .jar）、shaderpacks、resourcepacks、saves（解析 `level.dat` 显示世界名与最后游玩时间）、screenshots（缩略图与预览）、schematics（投影原理图，支持导入）；可直接编辑 `servers.dat` 服务器列表与 `options.txt` / `config/` 文本配置，改动前自动备份（详见“未发布”一节）。
+- 实例内容管理：分页查看并管理 mods（可禁用/启用 .jar）、shaderpacks、resourcepacks、saves（解析 `level.dat` 显示世界名与最后游玩时间）、screenshots（缩略图与预览）、schematics（投影原理图，支持导入）；可直接编辑 `servers.dat` 服务器列表与 `options.txt` / `config/` 文本配置，改动前自动备份（详见上方 0.6.1 更新内容）。
 
 ## 尚未实现 / 限制
 

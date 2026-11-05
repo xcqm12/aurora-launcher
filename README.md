@@ -169,7 +169,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 5. Modrinth 路由差异：使用 `project/{id}/version` 单数路径。
 6. CI `generate_context!` 找不到 `dist`：必须先构建前端再跑 cargo test。
 7. `spawnSync npm.cmd` EINVAL：构建脚本直接调用 tsc/vite 的 node 入口。
-8. GitHub 直连间歇超时：重试推送；未做 IP 扫描。
+8. GitHub 直连间歇超时：先重试推送（多数情况直接恢复）；仍失败用 `scripts/github-ip-fallback.ps1` 从官方 IP 段抽样测 TCP 443，`-WriteHosts` 把可用 IP 写入 hosts（标记行可撤销，备份 hosts.aurora-bak）。注意 `http.curloptResolve` 在 Windows 的 schannel 后端不可用，hosts 是唯一干净的指定 IP 方式。
 9. 本机 PATH 默认 Java 27 不适合 MC：启动器按版本要求选择 Java 17/21，可在实例中指定。
 10. Fabric 自动安装验证：生成 `fabric-loader-0.16.0-1.20.1` 并成功启动。
 11. BMCLAPI 是重定向/签名层且 JSON 内仍是 Mojang URL：必须由客户端映射主机，不能缓存签名 URL。

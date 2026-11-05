@@ -30,3 +30,4 @@ Thumbs.db
 mod/companion/.gradle/
 mod/companion/build/
 mod/companion/run/
+target-harden/

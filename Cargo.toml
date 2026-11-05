@@ -1,3 +1,14 @@
 [workspace]
 members = ["src-tauri"]
 resolver = "2"
+
+# 发布产物反逆向加固（源码仓库保持 MIT 开源，仅作用于二进制）：
+# strip 剥离全部符号，fat LTO + 单 codegen 单元最大化内联重排，
+# panic=abort 去掉 unwind 表；配合 NSIS/LZMA 压缩，exe 内只剩
+# 机器码与字符串字面量，逆向成本最大化。
+[profile.release]
+strip = "symbols"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+opt-level = "s"

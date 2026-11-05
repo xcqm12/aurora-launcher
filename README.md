@@ -2,7 +2,14 @@
 
 Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游戏启动与加载器自动安装、微软正版/LittleSkin/离线登录、整合包导入导出、实例内容管理、镜像加速、EasyTier 联机。历史版本更新记录见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
-## 0.6.2 更新内容
+## 0.6.3 更新内容
+
+- **加载器安装全链路重试**：Forge/NeoForge/Fabric/OptiFine/LiteLoader/Cleanroom 的版本信息、安装器与依赖下载共 8 处裸请求全部接入统一重试助手（每地址最多 3 次，4xx 不重试），配合既有的失败库预下载恢复，网络抖动不再让安装直接失败。
+- **OptiFine 安装增强**（参考 PCL-CE 的下载策略）：版本列表优先 BMCLAPI JSON，失败回退官网 HTML 解析；官网抓取带 UA/Referer 且重试。
+- **发布产物反逆向加固**：`strip = symbols`、`lto = fat`、`codegen-units = 1`、`panic = abort`——exe 不再含符号与 unwind 表；代码仓库保持 MIT 开源，混淆只作用于编译产物。
+- **网络诊断脚本**：`python scripts/network_check.py`（标准库实现）扫描 GitHub 官方 IP 段（本机 62/72 可用）与加载器全部端点；实测发现 BMCLAPI 版本清单在本机 SSL 握手失败——auto 下载源会自动改走官方，这也是此前安装偶发失败的根因之一。
+
+## 0.6.2 更新内容（历史）
 
 - **启动失败修复**：AI 伙伴的 JVM 参数 `-Daurora.ai.port` 与端口号被拆成两个参数，JVM 把端口号当主类名（"找不到或无法加载主类 8123"，exit 1 且无游戏输出）。已合并为单个 `-Dkey=value`；进程异常退出且全程无输出时，日志会给出排查提示。
 - **下载自动重试**：加载器安装、游戏文件、资源、EasyTier 下载在传输中途断流时自动重试最多 3 次（4xx 除外），不再直接报"error decoding response body"。

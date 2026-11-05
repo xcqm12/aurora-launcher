@@ -120,21 +120,18 @@ async fn download_pack_file(
             last_error = format!("来源不在白名单：{raw}");
             continue;
         }
-        let response = match client.get(url).send().await {
-            Ok(response) => response,
-            Err(error) => {
-                last_error = error.to_string();
-                continue;
-            }
-        };
-        if !response.status().is_success() {
-            last_error = format!("HTTP {}", response.status().as_u16());
-            continue;
-        }
-        let bytes = match response.bytes().await {
+        // 整合包内文件数量多，单文件断流自动重试后再换下一个地址。
+        let bytes = match crate::download_bytes_retry(
+            || client.get(url.clone()),
+            "下载整合包文件",
+            crate::DOWNLOAD_ATTEMPTS,
+            |_, _| {},
+        )
+        .await
+        {
             Ok(bytes) => bytes,
             Err(error) => {
-                last_error = error.to_string();
+                last_error = error;
                 continue;
             }
         };

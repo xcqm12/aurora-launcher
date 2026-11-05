@@ -101,16 +101,37 @@ async fn download_to_progressing(
     Err(format!("下载失败：{last}"))
 }
 
+/// OptiFine 官网反爬需要特定 UA 与 Referer；带重试的文本抓取。
+async fn optifine_get_text(
+    client: &reqwest::Client,
+    url: &str,
+    referer: Option<&str>,
+) -> Result<String, String> {
+    let bytes = crate::download_bytes_retry(
+        || {
+            let mut builder = client.get(url).header("User-Agent", OPTIFINE_UA);
+            if let Some(referer) = referer {
+                builder = builder.header("Referer", referer);
+            }
+            builder
+        },
+        "OptiFine 官网",
+        crate::DOWNLOAD_ATTEMPTS,
+        |_, _| {},
+    )
+    .await?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("请求失败：{e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("HTTP {}", response.status().as_u16()));
-    }
-    Ok(response.bytes().await.map_err(|e| e.to_string())?.to_vec())
+    // 加载器元数据/版本 JSON 也可能中途断流；统一走重试下载。
+    crate::download_bytes_retry(
+        || client.get(url),
+        "请求",
+        crate::DOWNLOAD_ATTEMPTS,
+        |_, _| {},
+    )
+    .await
 }
 
 /// Try each candidate URL in order (mirror first when the source says so).
@@ -219,16 +240,9 @@ async fn installer_url(
             } else {
                 "https://meta.legacyfabric.net"
             };
-            let values: Vec<Value> = client
-                .get(format!("{base}/v2/versions/installer"))
-                .send()
-                .await
-                .map_err(|e| format!("获取安装器信息失败：{e}"))?
-                .error_for_status()
-                .map_err(|_| "获取安装器信息失败".to_string())?
-                .json()
-                .await
-                .map_err(|e| e.to_string())?;
+            let raw = fetch(&client, &format!("{base}/v2/versions/installer")).await?;
+            let values: Vec<Value> = serde_json::from_slice(&raw)
+                .map_err(|e| format!("安装器版本列表解析失败：{e}"))?;
             let chosen = values
                 .iter()
                 .find(|value| value.get("stable").and_then(|item| item.as_bool()) == Some(true))
@@ -258,17 +272,13 @@ async fn installer_url(
             "https://maven.neoforged.net/releases/net/neoforged/neoforge/{version}/neoforge-{version}-installer.jar"
         )),
         "cleanroom" => {
-            let release: Value = client
-                .get("https://api.github.com/repos/CleanroomMC/Cleanroom/releases/latest")
-                .header("User-Agent", "AuroraLauncher/0.4")
-                .send()
-                .await
-                .map_err(|e| format!("获取 Cleanroom 发布信息失败：{e}"))?
-                .error_for_status()
-                .map_err(|_| "获取 Cleanroom 发布信息失败".to_string())?
-                .json()
-                .await
-                .map_err(|e| e.to_string())?;
+            let raw = fetch(
+                &client,
+                "https://api.github.com/repos/CleanroomMC/Cleanroom/releases/latest",
+            )
+            .await?;
+            let release: Value = serde_json::from_slice(&raw)
+                .map_err(|e| format!("Cleanroom 发布信息解析失败：{e}"))?;
             release
                 .get("assets")
                 .and_then(|value| value.as_array())
@@ -563,21 +573,25 @@ async fn install_optifine(
     ensure_vanilla(&app, &client, &game_dir, &minecraft, &source).await?;
 
     let name = if version.trim().is_empty() {
-        let html = client
-            .get("https://optifine.net/downloads")
-            .header("User-Agent", OPTIFINE_UA)
-            .send()
-            .await
-            .map_err(|e| format!("打开 OptiFine 官网失败：{e}"))?
-            .error_for_status()
-            .map_err(|_| "OptiFine 官网返回错误".to_string())?
-            .text()
-            .await
-            .map_err(|e| e.to_string())?;
-        optifine_versions_for_page(&html, &minecraft)
-            .first()
-            .cloned()
-            .ok_or_else(|| format!("OptiFine 官网没有找到适配 {minecraft} 的版本"))?
+        // 参考 PCL：版本列表优先 BMCLAPI JSON（稳定），失败回退官网 HTML 解析。
+        match optifine_versions_bmclapi(&client, &minecraft).await {
+            Some(versions) => versions
+                .first()
+                .cloned()
+                .ok_or_else(|| format!("OptiFine 没有适配 {minecraft} 的版本"))?,
+            None => {
+                let html = optifine_get_text(
+                    &client,
+                    "https://optifine.net/downloads",
+                    Some("https://optifine.net"),
+                )
+                .await?;
+                optifine_versions_for_page(&html, &minecraft)
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| format!("OptiFine 官网没有找到适配 {minecraft} 的版本"))?
+            }
+        }
     } else {
         normalize_optifine_name(&version)
     };
@@ -717,16 +731,9 @@ async fn install_liteloader(
     let source = crate::launch::resolve_download_source(&client, &crate::read_settings(&app).download_source).await;
     ensure_vanilla(&app, &client, &game_dir, &minecraft, &source).await?;
 
-    let meta: Value = client
-        .get(LITELOADER_META)
-        .send()
-        .await
-        .map_err(|e| format!("获取 LiteLoader 官方元数据失败：{e}"))?
-        .error_for_status()
-        .map_err(|_| "LiteLoader 官方元数据不可用".to_string())?
-        .json()
-        .await
-        .map_err(|e| e.to_string())?;
+    let raw = fetch(&client, LITELOADER_META).await?;
+    let meta: Value =
+        serde_json::from_slice(&raw).map_err(|e| format!("LiteLoader 元数据解析失败：{e}"))?;
     let node = meta
         .pointer(&format!("/versions/{minecraft}"))
         .cloned()
@@ -751,15 +758,13 @@ async fn install_liteloader(
     let metadata_url = format!(
         "{LITELOADER_REPO}com/mumfrey/liteloader/{version_str}/maven-metadata.xml"
     );
-    let core_name = match client.get(&metadata_url).send().await {
-        Ok(response) if response.status().is_success() => {
-            let xml = response.text().await.unwrap_or_default();
-            match snapshot_file_name(&xml) {
-                Some(snapshot) => format!("liteloader-{minecraft}-{snapshot}.jar"),
-                None => format!("liteloader-{version_str}.jar"),
-            }
-        }
-        _ => format!("liteloader-{version_str}.jar"),
+    // metadata.xml 拿不到就回退到固定名；重试交给 fetch。
+    let core_name = match fetch(&client, &metadata_url).await {
+        Ok(xml) => match snapshot_file_name(&String::from_utf8_lossy(&xml)) {
+            Some(snapshot) => format!("liteloader-{minecraft}-{snapshot}.jar"),
+            None => format!("liteloader-{version_str}.jar"),
+        },
+        Err(_) => format!("liteloader-{version_str}.jar"),
     };
     let core_url = format!("{LITELOADER_REPO}com/mumfrey/liteloader/{version_str}/{core_name}");
     let core_bytes = fetch(&client, &core_url).await?;
@@ -834,11 +839,9 @@ async fn install_liteloader(
                     .map(|(dir, _)| dir)
                     .unwrap_or_default()
             );
-            let xml = match client.get(&metadata_url).send().await {
-                Ok(response) if response.status().is_success() => {
-                    response.text().await.unwrap_or_default()
-                }
-                _ => String::new(),
+            let xml = match fetch(&client, &metadata_url).await {
+                Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                Err(_) => String::new(),
             };
             let snapshot = snapshot_file_name(&xml)
                 .ok_or_else(|| format!("无法解析快照依赖 {name}（{metadata_url}）"))?;
@@ -984,6 +987,46 @@ pub(crate) fn optifine_names_from_page(html: &str) -> Vec<String> {
     names
 }
 
+/// OptiFine 版本列表，BMCLAPI（与 PCL 一致的做法）：官网 HTML 反爬不稳定，
+/// BMCLAPI 提供 JSON 列表；失败返回 None 由调用方回退官网解析。
+async fn optifine_versions_bmclapi(
+    client: &reqwest::Client,
+    minecraft: &str,
+) -> Option<Vec<String>> {
+    let raw = crate::download_bytes_retry(
+        || client.get("https://bmclapi2.bangbang93.com/optifine/versionList"),
+        "OptiFine 版本列表（BMCLAPI）",
+        crate::DOWNLOAD_ATTEMPTS,
+        |_, _| {},
+    )
+    .await
+    .ok()?;
+    let values: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    let list = values.as_array()?;
+    let mut versions: Vec<String> = list
+        .iter()
+        .filter_map(|entry| {
+            let mc = entry.get("mcversion")?.as_str()?;
+            if mc != minecraft {
+                return None;
+            }
+            // 预览版不自动推荐；手动填名字仍可用（normalize_optifine_name）。
+            let patch = entry.get("patch")?.as_str()?;
+            if patch.contains("pre") {
+                return None;
+            }
+            let kind = entry.get("type")?.as_str()?;
+            Some(format!("OptiFine_{mc}_{kind}_{patch}"))
+        })
+        .collect();
+    versions.reverse();
+    if versions.is_empty() {
+        None
+    } else {
+        Some(versions)
+    }
+}
+
 pub(crate) fn optifine_versions_for_page(html: &str, minecraft: &str) -> Vec<String> {
     let prefix = format!("OptiFine_{minecraft}_");
     let mut versions: Vec<String> = optifine_names_from_page(html)
@@ -995,19 +1038,13 @@ pub(crate) fn optifine_versions_for_page(html: &str, minecraft: &str) -> Vec<Str
 }
 
 async fn optifine_download_token(client: &reqwest::Client, name: &str) -> Result<String, String> {
-    let response = client
-        .get(format!("https://optifine.net/adloadx?f={name}.jar"))
-        .header("User-Agent", OPTIFINE_UA)
-        .send()
-        .await
-        .map_err(|e| format!("打开 OptiFine 下载页失败：{e}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "OptiFine 下载页返回 HTTP {}",
-            response.status().as_u16()
-        ));
-    }
-    let html = response.text().await.map_err(|e| e.to_string())?;
+    // 与 PCL 同样的流程：adloadx 广告页生成一次性 token，解析后拼 downloadx。
+    let html = optifine_get_text(
+        client,
+        &format!("https://optifine.net/adloadx?f={name}.jar"),
+        Some("https://optifine.net/downloads"),
+    )
+    .await?;
     let needle = format!("downloadx?f={name}.jar&x=");
     let start = html
         .find(&needle)

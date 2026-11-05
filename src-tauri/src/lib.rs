@@ -2585,14 +2585,13 @@ async fn download_loader_installer(
     fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
     let target = folder.join(filename);
     let client = http_client(&app)?;
-    let response = client
-        .get(parsed)
-        .send()
-        .await
-        .map_err(|e| format!("安装器下载失败：{e}"))?
-        .error_for_status()
-        .map_err(|_| "安装器下载服务器返回错误".to_string())?;
-    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    let bytes = download_bytes_retry(
+        || client.get(parsed.clone()),
+        "下载安装器",
+        DOWNLOAD_ATTEMPTS,
+        |_, _| {},
+    )
+    .await?;
     if bytes.len() > 512 * 1024 * 1024 {
         return Err("安装器超过 512 MiB 安全上限".into());
     }

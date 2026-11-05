@@ -1,4 +1,11 @@
-# Aurora Launcher v0.6.2
+# Aurora Launcher v0.6.3
+
+- **加载器安装全链路重试**：版本 JSON/元数据、安装器下载、整合包文件等 8 处裸请求全部接入统一重试（每地址最多 3 次），修复网络抖动/代理断流导致的安装失败（error decoding response body 不再直接中止）。
+- **OptiFine 安装增强（参考 PCL-CE）**：版本列表优先走 BMCLAPI JSON（不再只依赖官网 HTML 反爬解析），失败自动回退官网；官网抓取带 UA/Referer 并重试。
+- **二进制反逆向加固**：发布 exe 剥离全部符号（strip=symbols）、fat LTO、单编译单元、panic=abort；源码仓库保持 MIT 开源不变。
+- **网络诊断工具**：`python scripts/network_check.py` 一键扫描 GitHub 官方 IP 段可用 IP（本机实测 62/72）与加载器全部下载端点，定位安装失败是网络问题还是程序问题。
+
+# Aurora Launcher v0.6.2（历史）
 
 - 修复：AI 伙伴的 JVM 参数被拆成两个元素（`-Daurora.ai.port` 与端口号分开），JVM 把端口号当主类名导致启动即退（"找不到或无法加载主类 8123"，exit 1）；现已合并为单个 `-Daurora.ai.port=8123`。AI 服务默认开启，这是 v0.6.1 所有实例首次启动失败的原因。
 - 修复：所有网络下载（加载器、游戏文件、资源、EasyTier）在传输中途断流（reqwest 报 error decoding response body）时自动重试最多 3 次（4xx 除外），错误信息改为中文说明原因。

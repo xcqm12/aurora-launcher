@@ -2,7 +2,12 @@
 
 Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游戏启动与加载器自动安装、微软正版/LittleSkin/离线登录、整合包导入导出、实例内容管理、镜像加速、EasyTier 联机。历史版本更新记录见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
-## 0.6.3 更新内容
+## 0.6.4 更新内容
+
+- **自定义 MC 镜像源**：下载源新增「自定义镜像」，填镜像站地址即可（BMCLAPI 兼容布局；默认示例为自建镜像 mc.elingfeng.com）。镜像覆盖版本清单/JSON、client jar、assets、libraries、Forge/NeoForge/Fabric maven；NeoForge 自动去掉 `/releases` 前缀，镜像优先、官方兜底。
+- 镜像站搭建：nginx `proxy_cache` 磁盘缓存反代官方源 + `sync_forge.py` 每日从 files.minecraftforge.net 同步 Forge 清单与安装器（官方 maven 已下架老版本文件，安装器经 USTC BMCLAPI 节点获取）。
+
+## 0.6.3 更新内容（历史）
 
 - **加载器安装全链路重试**：Forge/NeoForge/Fabric/OptiFine/LiteLoader/Cleanroom 的版本信息、安装器与依赖下载共 8 处裸请求全部接入统一重试助手（每地址最多 3 次，4xx 不重试），配合既有的失败库预下载恢复，网络抖动不再让安装直接失败。
 - **OptiFine 安装增强**（参考 PCL-CE 的下载策略）：版本列表优先 BMCLAPI JSON，失败回退官网 HTML 解析；官网抓取带 UA/Referer 且重试。

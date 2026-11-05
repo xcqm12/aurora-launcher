@@ -4056,12 +4056,37 @@ function SettingsPage({
         </div>
         <label className="field-label">
           下载源
-          <select value={downloadSource} onChange={(event) => setDownloadSource(event.target.value)}>
+          <select
+            value={downloadSource.startsWith("custom:") ? "custom" : downloadSource}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (value === "custom") {
+                // 默认给 Aurora 自建镜像；已存过自定义值则保留原值。
+                setDownloadSource(
+                  downloadSource.startsWith("custom:") ? downloadSource : "custom:https://mc.elingfeng.com",
+                );
+              } else {
+                setDownloadSource(value);
+              }
+            }}
+          >
             <option value="official">Mojang 官方</option>
             <option value="bmclapi">BMCLAPI 国内镜像</option>
             <option value="auto">自动（探测最优下载源）</option>
+            <option value="custom">自定义镜像（MC 镜像站）</option>
           </select>
         </label>
+        {downloadSource.startsWith("custom:") && (
+          <label className="field-label">
+            自定义镜像地址（BMCLAPI 兼容布局，镜像优先、官方兜底）
+            <input
+              value={downloadSource.slice("custom:".length)}
+              onChange={(event) => setDownloadSource(`custom:${event.target.value.trim()}`)}
+              placeholder="https://mc.elingfeng.com"
+              spellCheck={false}
+            />
+          </label>
+        )}
         <label className="field-label">
           联机共享节点（可选，逗号分隔；留空使用内置默认节点）
           <input

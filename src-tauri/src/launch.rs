@@ -435,6 +435,43 @@ fn existing_version_file(ctx: &LaunchContext, id: &str, name: &str) -> Option<Pa
     None
 }
 
+/// 把官方 URL 映射到自定义镜像（BMCLAPI 兼容布局）上的路径。
+/// 返回 None 表示该 URL 在镜像上没有对应路径，调用方应只用官方。
+pub(crate) fn mirror_url_at(base: &str, original: &str, version_id: &str) -> Option<String> {
+    let base = base.trim_end_matches('/');
+    let url = reqwest::Url::parse(original).ok()?;
+    let host = url.host_str()?;
+    let path = url.path();
+    let mapped = match host {
+        // 版本清单 / 版本 JSON / asset index：piston-meta → /mc/game、/v1/packages
+        "piston-meta.mojang.com" | "launchermeta.mojang.com" => {
+            Some(format!("{base}{path}"))
+        }
+        // client jar 等：piston-data /v1/objects/{hash}/client.jar
+        "piston-data.mojang.com" => Some(format!("{base}{path}")),
+        // assets：/assets/{2}/{hash}
+        "resources.download.minecraft.net" => {
+            let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+            if parts.len() == 2 {
+                Some(format!("{base}/assets/{}/{}", parts[0], parts[1]))
+            } else {
+                None
+            }
+        }
+        // libraries 与 Forge：/maven/...（Forge 官方 URL 自带 /maven/ 前缀）
+        "libraries.minecraft.net" => Some(format!("{base}/maven{path}")),
+        "maven.minecraftforge.net" => Some(format!("{base}{path}")),
+        // NeoForge：镜像布局去掉 /releases 前缀，补 /maven/
+        "maven.neoforged.net" => Some(format!(
+            "{base}/maven{}",
+            path.trim_start_matches("/releases")
+        )),
+        _ => None,
+    };
+    let _ = version_id;
+    mapped
+}
+
 pub(crate) fn mirror_url(original: &str, version_id: &str) -> Option<String> {
     let url = reqwest::Url::parse(original).ok()?;
     let host = url.host_str()?;
@@ -479,6 +516,15 @@ pub(crate) fn mirror_url(original: &str, version_id: &str) -> Option<String> {
 }
 
 pub(crate) fn candidates(url: &str, source: &str, version_id: &str) -> Vec<String> {
+    // custom:<base>：自定义镜像（BMCLAPI 兼容布局）优先，官方兜底。
+    if let Some(base) = source.strip_prefix("custom:") {
+        if !base.trim().is_empty() {
+            return match mirror_url_at(base.trim(), url, version_id) {
+                Some(mirror) => vec![mirror, url.to_string()],
+                None => vec![url.to_string()],
+            };
+        }
+    }
     let mirror = mirror_url(url, version_id);
     match source {
         "bmclapi" => mirror
@@ -500,7 +546,11 @@ pub(crate) async fn resolve_download_source(
     match setting {
         "bmclapi" => return "bmclapi".into(),
         "official" => return "official".into(),
-        _ => {}
+        other => {
+            if other.starts_with("custom:") {
+                return other.to_string();
+            }
+        }
     }
     static CACHE: std::sync::OnceLock<Mutex<Option<(std::time::Instant, String)>>> =
         std::sync::OnceLock::new();
@@ -1364,6 +1414,54 @@ mod tests {
             replace_placeholders("--username ${auth_player_name} -cp ${classpath}", &map),
             "--username Steve -cp a.jar;b.jar"
         );
+    }
+
+    #[test]
+    fn mirror_url_at_maps_bmclapi_compatible_layout() {
+        let base = "https://mc.elingfeng.com";
+        assert_eq!(
+            mirror_url_at(base, "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json", "1.20.1").as_deref(),
+            Some("https://mc.elingfeng.com/mc/game/version_manifest_v2.json")
+        );
+        assert_eq!(
+            mirror_url_at(base, "https://piston-data.mojang.com/v1/objects/abc/client.jar", "1.20.1").as_deref(),
+            Some("https://mc.elingfeng.com/v1/objects/abc/client.jar")
+        );
+        assert_eq!(
+            mirror_url_at(base, "https://libraries.minecraft.net/com/google/code/gson/gson/2.10/gson-2.10.jar", "1.20.1").as_deref(),
+            Some("https://mc.elingfeng.com/maven/com/google/code/gson/gson/2.10/gson-2.10.jar")
+        );
+        assert_eq!(
+            mirror_url_at(base, "https://maven.minecraftforge.net/maven/net/minecraftforge/forge/1.20.1-47.4.28/forge-1.20.1-47.4.28-installer.jar", "1.20.1").as_deref(),
+            Some("https://mc.elingfeng.com/maven/net/minecraftforge/forge/1.20.1-47.4.28/forge-1.20.1-47.4.28-installer.jar")
+        );
+        // NeoForge 去掉 /releases 前缀
+        assert_eq!(
+            mirror_url_at(base, "https://maven.neoforged.net/releases/net/neoforged/neoforge/20.4.237/neoforge-20.4.237-installer.jar", "1.20.4").as_deref(),
+            Some("https://mc.elingfeng.com/maven/net/neoforged/neoforge/20.4.237/neoforge-20.4.237-installer.jar")
+        );
+        // assets 双段映射
+        assert_eq!(
+            mirror_url_at(base, "https://resources.download.minecraft.net/0f/0fabc", "1.20.1").as_deref(),
+            Some("https://mc.elingfeng.com/assets/0f/0fabc")
+        );
+        // 无映射的 host 返回 None
+        assert_eq!(mirror_url_at(base, "https://example.com/x", "1.20.1"), None);
+    }
+
+    #[test]
+    fn candidates_custom_mirror_first_official_fallback() {
+        let urls = candidates(
+            "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json",
+            "custom:https://mc.elingfeng.com",
+            "1.20.1",
+        );
+        assert_eq!(urls.len(), 2);
+        assert!(urls[0].starts_with("https://mc.elingfeng.com/"));
+        assert!(urls[1].starts_with("https://piston-meta.mojang.com/"));
+        // 不可映射的 host 只剩官方
+        let urls = candidates("https://example.com/x", "custom:https://mc.elingfeng.com", "1.20.1");
+        assert_eq!(urls, vec!["https://example.com/x".to_string()]);
     }
 
     #[test]

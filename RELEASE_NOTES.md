@@ -1,4 +1,9 @@
-# Aurora Launcher v0.6.3
+# Aurora Launcher v0.6.4
+
+- **自定义 MC 镜像源**：设置 → 下载源新增「自定义镜像」，填入镜像站地址（BMCLAPI 兼容布局，内置适配 mc.elingfeng.com），版本清单、client jar、assets、libraries、Forge/NeoForge/Fabric 安装器全部走镜像，官方自动兜底；映射规则有单测覆盖。
+- 配套自建镜像说明：镜像站用 nginx 磁盘缓存反代 Mojang/Forge 官方源，Forge 老版本（官方 maven 已下架）经 USTC BMCLAPI 节点兜底，每日 cron 从 files.minecraftforge.net 同步版本清单与安装器到本地。
+
+# Aurora Launcher v0.6.3（历史）
 
 - **加载器安装全链路重试**：版本 JSON/元数据、安装器下载、整合包文件等 8 处裸请求全部接入统一重试（每地址最多 3 次），修复网络抖动/代理断流导致的安装失败（error decoding response body 不再直接中止）。
 - **OptiFine 安装增强（参考 PCL-CE）**：版本列表优先走 BMCLAPI JSON（不再只依赖官网 HTML 反爬解析），失败自动回退官网；官网抓取带 UA/Referer 并重试。

@@ -109,14 +109,33 @@ pub fn ensure_server(app: &tauri::AppHandle, player: &str) -> Result<Vec<String>
 }
 
 fn jvm_args(port: u16, token: &str, player: &str) -> Vec<String> {
+    // 必须是单个 `-Dkey=value` 参数。拆成两个元素会让端口号被 JVM
+    // 当作主类名（"找不到或无法加载主类 8123"，进程 exit 1）。
     vec![
-        "-Daurora.ai.port".to_string(),
-        port.to_string(),
-        "-Daurora.ai.token".to_string(),
-        token.to_string(),
-        "-Daurora.ai.player".to_string(),
-        player.to_string(),
+        format!("-Daurora.ai.port={port}"),
+        format!("-Daurora.ai.token={token}"),
+        format!("-Daurora.ai.player={player}"),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jvm_args_are_well_formed_d_flags() {
+        let args = jvm_args(8123, "tok", "玩家");
+        assert_eq!(args.len(), 3);
+        for arg in &args {
+            assert!(arg.starts_with("-Daurora.ai."), "{arg}");
+            let (_, value) = arg.split_once('=').unwrap_or_else(|| {
+                panic!("-D 参数必须带 = 值：{arg}")
+            });
+            assert!(!value.is_empty());
+        }
+        assert_eq!(args[0], "-Daurora.ai.port=8123");
+        assert_eq!(args[2], "-Daurora.ai.player=玩家");
+    }
 }
 
 fn random_token() -> String {

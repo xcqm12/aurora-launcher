@@ -1216,22 +1216,27 @@ pub fn spawn(
     hide_console(&mut command);
     let mut child = command.spawn().map_err(|e| format!("无法启动 Java：{e}"))?;
     let pid = child.id();
+    let output_lines = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     if let Some(stdout) = child.stdout.take() {
         let on_line = on_line.clone();
+        let output_lines = Arc::clone(&output_lines);
         std::thread::spawn(move || {
             use std::io::BufRead;
             let reader = std::io::BufReader::new(stdout);
             for line in reader.lines().map_while(Result::ok) {
+                output_lines.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 on_line(line);
             }
         });
     }
     if let Some(stderr) = child.stderr.take() {
         let on_line = on_line.clone();
+        let output_lines = Arc::clone(&output_lines);
         std::thread::spawn(move || {
             use std::io::BufRead;
             let reader = std::io::BufReader::new(stderr);
             for line in reader.lines().map_while(Result::ok) {
+                output_lines.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 on_line(line);
             }
         });
@@ -1245,6 +1250,14 @@ pub fn spawn(
                 .map(|value| value.to_string())
                 .unwrap_or_else(|error| error.to_string())
         ));
+        // 非零退出但全程没有游戏输出时，给出排查方向而不是只留一个退出码。
+        let failed = code.map(|value| value != 0).unwrap_or(true);
+        if failed && output_lines.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+            let _ = on_line(
+                "[Aurora] 进程退出前没有产生任何输出。常见原因：JVM 参数格式错误（例如 -D 缺少 = 值）、                 Java 与实例不兼容、或崩溃发生在日志系统初始化之前；可在实例管理中检查 Java 与内存设置。"
+                    .to_string(),
+            );
+        }
         on_exit(code);
     });
     Ok(pid)

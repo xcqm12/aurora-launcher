@@ -1197,6 +1197,93 @@ fn emit_resource_progress(
     );
 }
 
+/// 网络抖动/代理断流很常见（reqwest 报 error decoding response body），
+/// 所有流式下载统一按地址重试这么多轮。
+pub(crate) const DOWNLOAD_ATTEMPTS: usize = 3;
+
+fn friendly_download_error(error: &reqwest::Error, label: &str) -> String {
+    let detail = error.to_string();
+    if error.is_decode() {
+        // 典型场景：代理断流、CDN 掐断连接；重试通常可恢复。
+        format!("{label}：网络连接在传输中中断（{detail}）")
+    } else if error.is_timeout() {
+        format!("{label}：下载超时")
+    } else {
+        format!("{label}：{detail}")
+    }
+}
+
+async fn stream_response_body<P>(
+    mut response: reqwest::Response,
+    label: &str,
+    mut on_progress: P,
+) -> Result<Vec<u8>, String>
+where
+    P: FnMut(u64, u64) + Send,
+{
+    let total = response.content_length().unwrap_or(0);
+    let mut bytes: Vec<u8> = Vec::with_capacity(total.min(64 * 1024 * 1024) as usize);
+    let mut last_emit = 0u64;
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                bytes.extend_from_slice(&chunk);
+                if bytes.len() as u64 - last_emit >= 262_144 {
+                    last_emit = bytes.len() as u64;
+                    on_progress(last_emit, total);
+                }
+            }
+            Ok(None) => break,
+            Err(error) => return Err(friendly_download_error(&error, label)),
+        }
+    }
+    on_progress(bytes.len() as u64, total);
+    Ok(bytes)
+}
+
+/// 按地址重试的流式下载：每次尝试重新发起请求并从头接收；4xx 视为
+/// 确定性失败不重试，网络/解码/5xx 错误重试，间隔 600ms·attempt。
+/// 校验（大小/哈希）由调用方负责，失败可让调用方继续换下一个地址。
+pub(crate) async fn download_bytes_retry<F, P>(
+    mut build_request: F,
+    label: &str,
+    attempts: usize,
+    mut on_progress: P,
+) -> Result<Vec<u8>, String>
+where
+    F: FnMut() -> reqwest::RequestBuilder + Send,
+    P: FnMut(u64, u64) + Send,
+{
+    let attempts = attempts.max(1);
+    let mut last = String::new();
+    for attempt in 1..=attempts {
+        if attempt > 1 {
+            tokio::time::sleep(std::time::Duration::from_millis(600 * attempt as u64)).await;
+        }
+        let response = match build_request().send().await {
+            Ok(item) if item.status().is_success() => item,
+            Ok(item) => {
+                let status = item.status().as_u16();
+                last = format!("HTTP {status}");
+                if (400..500).contains(&status) {
+                    // 4xx 不会因为重试而改变。
+                    return Err(format!("{label}失败：{last}"));
+                }
+                continue;
+            }
+            Err(error) => {
+                last = friendly_download_error(&error, label);
+                continue;
+            }
+        };
+        match stream_response_body(response, label, &mut on_progress).await {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => last = error,
+        }
+    }
+    Err(format!("{label}失败（已尝试 {attempts} 次）：{last}"))
+}
+
 /// Stream a resource download, emitting `resource-progress` every 256 KiB and
 /// on completion, then verify size and hashes.
 async fn verified_bytes_streaming(
@@ -1210,31 +1297,13 @@ async fn verified_bytes_streaming(
         return Err("文件超过 512 MiB 安全上限".into());
     }
     emit_resource_progress(app, label, 0, expected_size);
-    let response = client
-        .get(parsed)
-        .send()
-        .await
-        .map_err(|e| format!("下载失败：{e}"))?
-        .error_for_status()
-        .map_err(|_| "下载服务器返回错误状态".to_string())?;
-    let total = response.content_length().unwrap_or(expected_size);
-    let mut bytes: Vec<u8> = Vec::with_capacity(total.min(64 * 1024 * 1024) as usize);
-    let mut last_emit = 0u64;
-    let mut response = response;
-    loop {
-        match response.chunk().await {
-            Ok(Some(chunk)) => {
-                bytes.extend_from_slice(&chunk);
-                if bytes.len() as u64 - last_emit >= 262_144 {
-                    last_emit = bytes.len() as u64;
-                    emit_resource_progress(app, label, last_emit, total);
-                }
-            }
-            Ok(None) => break,
-            Err(error) => return Err(format!("读取下载内容失败：{error}")),
-        }
-    }
-    emit_resource_progress(app, label, bytes.len() as u64, total);
+    let bytes = download_bytes_retry(
+        || client.get(parsed.clone()),
+        label,
+        DOWNLOAD_ATTEMPTS,
+        |downloaded, total| emit_resource_progress(app, label, downloaded, total),
+    )
+    .await?;
     if expected_size > 0 && bytes.len() as u64 != expected_size {
         return Err("文件大小校验失败".into());
     }

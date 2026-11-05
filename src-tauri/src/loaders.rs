@@ -66,49 +66,39 @@ async fn download_to_progressing(
             }
         }
     }
-    let mut response = None;
     let mut last = String::new();
     for url in urls {
-        match client.get(url).send().await {
-            Ok(item) if item.status().is_success() => {
-                response = Some(item);
-                break;
+        // 每个地址独立重试：网络抖动/代理断流在传输中途才暴露。
+        let bytes = crate::download_bytes_retry(
+            || client.get(url),
+            "下载",
+            crate::DOWNLOAD_ATTEMPTS,
+            |downloaded, total| emit_loader_progress(app, stage, filename, downloaded, total),
+        )
+        .await;
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                last = format!("{url}: {error}");
+                continue;
             }
-            Ok(item) => last = format!("{url}: HTTP {}", item.status().as_u16()),
-            Err(error) => last = format!("{url}: {error}"),
+        };
+        if size > 0 && bytes.len() as u64 != size {
+            last = format!("{url}: 文件大小校验失败（{} / {size} 字节）", bytes.len());
+            continue;
         }
-    }
-    let response = response.ok_or_else(|| format!("下载失败：{last}"))?;
-    let total = response.content_length().unwrap_or(size);
-    let mut bytes: Vec<u8> = Vec::with_capacity(total.min(64 * 1024 * 1024) as usize);
-    let mut last_emit = 0u64;
-    let mut response = response;
-    loop {
-        match response.chunk().await {
-            Ok(Some(chunk)) => {
-                bytes.extend_from_slice(&chunk);
-                if bytes.len() as u64 - last_emit >= 262_144 {
-                    last_emit = bytes.len() as u64;
-                    emit_loader_progress(app, stage, filename, last_emit, total);
-                }
+        if let Some(expected) = sha1 {
+            if hex::encode(Sha1::digest(&bytes)) != expected.to_lowercase() {
+                last = format!("{url}: SHA-1 校验失败");
+                continue;
             }
-            Ok(None) => break,
-            Err(error) => return Err(format!("读取下载内容失败：{error}")),
         }
-    }
-    emit_loader_progress(app, stage, filename, bytes.len() as u64, total);
-    if size > 0 && bytes.len() as u64 != size {
-        return Err("文件大小校验失败".into());
-    }
-    if let Some(expected) = sha1 {
-        if hex::encode(Sha1::digest(&bytes)) != expected.to_lowercase() {
-            return Err("SHA-1 校验失败".into());
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
+        return write_atomic(target, &bytes);
     }
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    write_atomic(target, &bytes)
+    Err(format!("下载失败：{last}"))
 }
 
 async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
@@ -596,51 +586,22 @@ async fn install_optifine(
     }
 
     let token = optifine_download_token(&client, &name).await?;
-    let response = client
-        .get(format!(
-            "https://optifine.net/downloadx?f={name}.jar&x={token}"
-        ))
-        .header("User-Agent", OPTIFINE_UA)
-        .header("Referer", format!("https://optifine.net/adloadx?f={name}.jar"))
-        .send()
-        .await
-        .map_err(|e| format!("下载 OptiFine 安装器失败：{e}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "下载 OptiFine 安装器返回 HTTP {}",
-            response.status().as_u16()
-        ));
-    }
-    let total = response.content_length().unwrap_or(0);
-    let mut bytes: Vec<u8> = Vec::with_capacity(total.min(64 * 1024 * 1024) as usize);
-    let mut last_emit = 0u64;
-    let mut response = response;
-    loop {
-        match response.chunk().await {
-            Ok(Some(chunk)) => {
-                bytes.extend_from_slice(&chunk);
-                if bytes.len() as u64 - last_emit >= 262_144 {
-                    last_emit = bytes.len() as u64;
-                    emit_loader_progress(
-                        &app,
-                        "下载 OptiFine 安装器",
-                        &format!("{name}.jar"),
-                        last_emit,
-                        total,
-                    );
-                }
-            }
-            Ok(None) => break,
-            Err(error) => return Err(format!("读取 OptiFine 下载内容失败：{error}")),
-        }
-    }
-    emit_loader_progress(
-        &app,
+    let bytes = crate::download_bytes_retry(
+        || {
+            client
+                .get(format!(
+                    "https://optifine.net/downloadx?f={name}.jar&x={token}"
+                ))
+                .header("User-Agent", OPTIFINE_UA)
+                .header("Referer", format!("https://optifine.net/adloadx?f={name}.jar"))
+        },
         "下载 OptiFine 安装器",
-        &format!("{name}.jar"),
-        bytes.len() as u64,
-        total,
-    );
+        crate::DOWNLOAD_ATTEMPTS,
+        |downloaded, total| {
+            emit_loader_progress(&app, "下载 OptiFine 安装器", &format!("{name}.jar"), downloaded, total)
+        },
+    )
+    .await?;
     if bytes.len() > OPTIFINE_MAX_BYTES {
         return Err("OptiFine 安装器体积异常".into());
     }

@@ -173,6 +173,8 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 15. Forge 安装器优先走 maven.creeperhost.net，该镜像偶发坏文件（trove/mixin SHA-1 校验失败即删，安装中止）：已实现失败库解析 + BMCLAPI/Sponge/Maven Central 预下载 + 自动重试（最多 3 次）；瞬时损坏通常第二次尝试即成功。
 16. 读写 `servers.dat` / `level.dat` 需要一个最小 NBT 编解码器，自写时踩了两个坑：Compound 的字段名本身已带 u16 长度前缀（不能再多读一次长度，否则报“数据不完整”）；列表值自身的标签是 `TAG_List(9)`，而不是元素的标签类型（写错会把列表编码成 Compound）。已加 NBT 往返测试覆盖。
 17. 模组启停最初按小写文件名重命名，会把 `JEI-1.20.jar` 变成 `jei-1.20.jar.disabled`：改为忽略大小写匹配后缀、保留原文件名（禁用只追加 `.disabled`，启用只去掉 `.disabled`），并加大小写保持测试。
+18. 游戏启动即退（exit 1 无输出）：AI 伙伴的 JVM 参数 `-Daurora.ai.port` 与值被拆成两个参数，JVM 把端口号当主类名（`java -Dfoo 8123 -version` 会报"找不到或无法加载主类 8123"，本机已复现验证）。修复为单个 `-Dkey=value`；smoke 测试此前传空 ai_args 所以没暴露。
+19. 下载中途断流（reqwest error decoding response body）：代理断流/CDN 掐连接，此前直接失败。已在所有流式下载（加载器/游戏文件/资源/EasyTier）统一加重试（每地址最多 3 次，600ms·n 退避，4xx 不重试），并给共享下载助手加了单测覆盖的友好错误文案。
 
 ## 发布
 

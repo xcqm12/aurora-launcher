@@ -399,6 +399,15 @@ function App() {
             <h1>{titles[view]}</h1>
           </div>
           <div className="top-actions">
+            {sakura && (
+              <button
+                className="icon-button"
+                onClick={() => void refreshSakura()}
+                title="换一张背景（随机二次元图）"
+              >
+                <ImageIcon size={18} />
+              </button>
+            )}
             {instances.length > 0 && (
               <select
                 className="instance-select"
@@ -4152,11 +4161,11 @@ function SettingsPage({
           )}
         </div>
         <label className="field-label">
-          随机图接口（可选；留空使用默认 https://www.dmoe.cc/random.php，也可换成你信任的图片接口）
+          随机图接口（可选；留空使用内置源池 dmoe.cc / paugram / alcy 随机轮换，也可换成你信任的单一接口，必须 https）
           <input
             value={sakuraSource}
             onChange={(event) => setSakuraSource(event.target.value)}
-            placeholder="https://www.dmoe.cc/random.php"
+            placeholder="留空使用内置源池，或填 https://…/random.php"
             spellCheck={false}
           />
         </label>

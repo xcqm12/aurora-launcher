@@ -1710,62 +1710,81 @@ async fn fetch_sakura_background(
     // 随机图接口不受本项目控制：返回内容无法预览，请求也会把本机 IP
     // 暴露给该第三方服务，因此设置页提供风险提示并允许随时关闭。
     let configured = read_settings(&app).sakura_source;
-    let source = if configured.trim().is_empty() {
-        "https://www.dmoe.cc/random.php".to_string()
+    // 默认源池（全部 https，2026-11-05 实测可用）：每次随机从其中一个开始，
+    // 单源失败自动换下一个；设置页配置了自定义来源则只用自定义来源。
+    const DEFAULT_SOURCES: [&str; 3] = [
+        "https://www.dmoe.cc/random.php",
+        "https://api.paugram.com/wallpaper/",
+        "https://t.alcy.cc/ycy",
+    ];
+    let candidates: Vec<String> = if configured.trim().is_empty() {
+        let start = (unix_now() as usize) % DEFAULT_SOURCES.len();
+        (0..DEFAULT_SOURCES.len())
+            .map(|offset| DEFAULT_SOURCES[(start + offset) % DEFAULT_SOURCES.len()].to_string())
+            .collect()
     } else {
-        configured.trim().to_string()
+        vec![configured.trim().to_string()]
     };
-    let parsed = reqwest::Url::parse(&source)
-        .map_err(|_| "樱花图来源地址无效，请在设置中检查".to_string())?;
-    if parsed.scheme() != "https" || parsed.host_str().unwrap_or_default().is_empty() {
-        return Err("樱花图来源必须使用 https".into());
-    }
     let client = http_client(&app)?;
-    let response = client
-        .get(parsed)
-        .send()
-        .await
-        .map_err(|e| format!("樱花背景请求失败：{e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("樱花背景返回 HTTP {}", response.status().as_u16()));
+    let mut last_error = String::new();
+    for source in &candidates {
+        let parsed = match reqwest::Url::parse(source) {
+            Ok(parsed) if parsed.scheme() == "https" && !parsed.host_str().unwrap_or_default().is_empty() => parsed,
+            _ => {
+                last_error = "樱花图来源地址无效或不是 https，请在设置中检查".into();
+                continue;
+            }
+        };
+        let response = match client.get(parsed).send().await {
+            Ok(response) if response.status().is_success() => response,
+            Ok(response) => {
+                last_error = format!("HTTP {}", response.status().as_u16());
+                continue;
+            }
+            Err(error) => {
+                last_error = format!("请求失败：{error}");
+                continue;
+            }
+        };
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        if !allowed_image_type(&content_type) {
+            last_error = format!("返回了不支持的图片格式（{content_type}）");
+            continue;
+        }
+        let bytes = match response.bytes().await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                last_error = format!("读取失败：{error}");
+                continue;
+            }
+        };
+        if bytes.len() > 8 * 1024 * 1024 {
+            last_error = "图片超过 8 MiB 上限".into();
+            continue;
+        }
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        fs::write(&cache_path, &bytes).map_err(|e| e.to_string())?;
+        fs::write(&meta_path, content_type.as_bytes()).map_err(|e| e.to_string())?;
+        return Ok(SakuraBackground {
+            data_url: format!(
+                "data:{content_type};base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&bytes)
+            ),
+            cached: false,
+        });
     }
-    if response.url().host_str().unwrap_or_default().is_empty() {
-        return Err("樱花背景来源无效".into());
-    }
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("")
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_lowercase();
-    if !allowed_image_type(&content_type) {
-        let _ = fs::remove_file(&cache_path);
-        let _ = fs::remove_file(&meta_path);
-        return Err("樱花背景不是支持的图片格式".into());
-    }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|_| "读取樱花背景失败".to_string())?;
-    if bytes.len() > 8 * 1024 * 1024 {
-        let _ = fs::remove_file(&cache_path);
-        let _ = fs::remove_file(&meta_path);
-        return Err("樱花背景超过 8 MiB 上限".into());
-    }
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    fs::write(&cache_path, &bytes).map_err(|e| e.to_string())?;
-    fs::write(&meta_path, content_type.as_bytes()).map_err(|e| e.to_string())?;
-    Ok(SakuraBackground {
-        data_url: format!(
-            "data:{content_type};base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(&bytes)
-        ),
-        cached: false,
-    })
+    let _ = fs::remove_file(&cache_path);
+    let _ = fs::remove_file(&meta_path);
+    Err(format!("樱花背景获取失败：{last_error}"))
 }
 
 #[derive(Debug, Serialize, Clone)]

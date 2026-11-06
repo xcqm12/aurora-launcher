@@ -1,4 +1,8 @@
-# Aurora Launcher v0.6.5
+# Aurora Launcher v0.6.6
+
+- **修复 v0.6.5 的启动修复未生效**：版本继承合并（`load_version` → `merge_child`）时 `inheritsFrom` 标记被丢弃，启动时仍判定为「原版」并把 `1.20.1.jar` 放上 classpath，Forge 继续报 `Modules minecraft and _1._20._1 export package ...` 并退出。现合并结果保留继承来源，并新增走真实合并路径的回归测试（原测试直接构造继承对象，未覆盖合并）。
+
+# Aurora Launcher v0.6.5（历史）
 
 - **修复 Forge/NeoForge/Fabric 启动即退**（`Modules minecraft and _1._20._1 export package ...`）：继承型版本 JSON（安装器生成，带 `inheritsFrom`）不再把原版 client jar 放上 classpath——Forge 的 BootstrapLauncher 依据 `--ignoreList` 与模块层自行装配 SRG 客户端，原版 jar 在场会被当成自动模块 `_1._20._1`，与生成的 `minecraft` 模块导出同样的包。原版启动不受影响； Fabric 场景同样按继承型处理。
 

@@ -2,7 +2,11 @@
 
 Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游戏启动与加载器自动安装、微软正版/LittleSkin/离线登录、整合包导入导出、实例内容管理、镜像加速、EasyTier 联机。历史版本更新记录见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
-## 0.6.5 更新内容
+## 0.6.6 更新内容
+
+- **修复 v0.6.5 的启动修复未生效**：版本继承合并（`load_version` → `merge_child`）时 `inheritsFrom` 标记被丢弃，启动仍判定为「原版」并把 `1.20.1.jar` 放上 classpath，Forge 继续报 `Modules minecraft and _1._20._1 export package ...`。现合并结果保留继承来源，并新增走真实合并路径的回归测试。
+
+## 0.6.5 更新内容（历史）
 
 - **修复 Forge/NeoForge/Fabric 启动即退**：继承型版本 JSON（`inheritsFrom`，安装器生成）不再把原版 client jar 放上 classpath。Forge 的 BootstrapLauncher 依据 `--ignoreList` 与模块层自行装配 SRG 客户端，原版 jar 在场会被当成自动模块 `_1._20._1`，与 `minecraft` 模块导出同样的包而报 `Modules minecraft and _1._20._1 export package ...`；原版启动不受影响。
 

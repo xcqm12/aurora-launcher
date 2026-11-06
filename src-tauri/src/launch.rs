@@ -219,6 +219,11 @@ fn merge_child(mut parent: VersionJson, child: VersionJson) -> VersionJson {
         parent.version_type = child.version_type;
     }
     parent.id = child.id;
+    // 保留继承来源：合并结果代表的是「继承型」版本，加载器启动时据此
+    // 不放原版 client jar（见 json_provides_client）。
+    if parent.inherits_from.is_none() {
+        parent.inherits_from = child.inherits_from.clone();
+    }
     parent
 }
 
@@ -1479,6 +1484,36 @@ mod tests {
             mk("net.fabricmc:fabric-loader:0.16.0"),
             mk("net.minecraft:client:1.20.1"),
         ])));
+    }
+
+    #[test]
+    fn merged_inherited_version_keeps_inherits_from() {
+        let mk = |name: &str| Library {
+            name: name.into(),
+            downloads: None,
+            natives: None,
+            rules: None,
+            extract: None,
+            url: None,
+        };
+        let vanilla = VersionJson {
+            id: "1.20.1".into(),
+            inherits_from: None,
+            libraries: Some(vec![mk("com.google.code.gson:gson:2.10")]),
+            ..Default::default()
+        };
+        let child = VersionJson {
+            id: "1.20.1-forge-47.4.28".into(),
+            inherits_from: Some("1.20.1".into()),
+            libraries: Some(vec![mk("net.minecraftforge:forge:1.20.1-47.4.28:universal")]),
+            ..Default::default()
+        };
+        // 真实启动路径是 load_version -> merge_child -> json_provides_client；
+        // 合并后必须仍被识别为继承型，否则原版 jar 会被放上 classpath，
+        // 重新触发 _1._20._1 模块冲突。
+        let merged = merge_child(vanilla, child);
+        assert_eq!(merged.inherits_from.as_deref(), Some("1.20.1"));
+        assert!(!json_provides_client(&merged));
     }
 
     #[test]

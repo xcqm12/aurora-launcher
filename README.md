@@ -193,6 +193,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 17. 模组启停最初按小写文件名重命名，会把 `JEI-1.20.jar` 变成 `jei-1.20.jar.disabled`：改为忽略大小写匹配后缀、保留原文件名（禁用只追加 `.disabled`，启用只去掉 `.disabled`），并加大小写保持测试。
 18. 游戏启动即退（exit 1 无输出）：AI 伙伴的 JVM 参数 `-Daurora.ai.port` 与值被拆成两个参数，JVM 把端口号当主类名（`java -Dfoo 8123 -version` 会报"找不到或无法加载主类 8123"，本机已复现验证）。修复为单个 `-Dkey=value`；smoke 测试此前传空 ai_args 所以没暴露。
 19. 下载中途断流（reqwest error decoding response body）：代理断流/CDN 掐连接，此前直接失败。已在所有流式下载（加载器/游戏文件/资源/EasyTier）统一加重试（每地址最多 3 次，600ms·n 退避，4xx 不重试），并给共享下载助手加了单测覆盖的友好错误文案。
+20. Forge 1.20.1 启动即退 `Modules minecraft and _1._20._1 export package net.minecraft.data`：原版 client jar 被放上 classpath，BootstrapLauncher 按 `ignoreList`（只含 `minecraft.jar`）过滤，`1.20.1.jar` 成为自动模块 `_1._20._1`，与 SRG 客户端模块 `minecraft` 包导出冲突。修复：版本 JSON 的 libraries 已含 `net.minecraft:client`（Forge/Fabric）时跳过原版 jar。
 
 ## 发布
 

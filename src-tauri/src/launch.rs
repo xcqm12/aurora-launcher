@@ -859,13 +859,26 @@ fn replace_placeholders(value: &str, map: &HashMap<&str, String>) -> String {
     result
 }
 
-fn build_classpath(client_jar: &Path, libraries: &[PathBuf]) -> String {
+fn build_classpath(client_jar: Option<&Path>, libraries: &[PathBuf]) -> String {
     let mut entries = Vec::new();
-    entries.push(client_jar.display().to_string());
+    if let Some(jar) = client_jar {
+        entries.push(jar.display().to_string());
+    }
     for library in libraries {
         entries.push(library.display().to_string());
     }
     entries.join(";")
+}
+
+/// 版本 JSON 的 libraries 是否已包含 Minecraft 客户端本体。
+/// Forge 用 SRG 化的 net.minecraft:client（模块名 minecraft），Fabric 直接引
+/// net.minecraft:client；两者都不需要再把原版 jar 放上 classpath——否则
+/// BootstrapLauncher 会把 1.20.1.jar 当自动模块（_1._20._1），与 minecraft
+/// 模块导出同样的包，触发 ResolutionException 启动失败。
+fn json_provides_client(libraries: &[Library]) -> bool {
+    libraries
+        .iter()
+        .any(|library| library.name.starts_with("net.minecraft:client"))
 }
 
 fn authlib_args(authlib: Option<&crate::yggdrasil::LaunchAuthlib>) -> Vec<String> {
@@ -1145,7 +1158,12 @@ pub async fn prepare(
     let assets_dir = assets_root.display().to_string();
     let natives = natives_dir.display().to_string();
     let libraries_dir = ctx.libraries_root.display().to_string();
-    let classpath = build_classpath(&client_jar, &classpath);
+    let classpath = if json_provides_client(version.libraries.as_deref().unwrap_or(&[])) {
+        // Forge/Fabric 的版本 JSON 已含客户端本体，不能重复放原版 jar。
+        build_classpath(None, &classpath)
+    } else {
+        build_classpath(Some(&client_jar), &classpath)
+    };
     let mut placeholders: HashMap<&str, String> = HashMap::new();
     placeholders.insert("auth_player_name", ctx.username.clone());
     placeholders.insert("version_name", ctx.version_id.clone());
@@ -1414,6 +1432,41 @@ mod tests {
             replace_placeholders("--username ${auth_player_name} -cp ${classpath}", &map),
             "--username Steve -cp a.jar;b.jar"
         );
+    }
+
+    #[test]
+    fn json_provides_client_detection() {
+        let mk = |name: &str| Library {
+            name: name.into(),
+            downloads: None,
+            natives: None,
+            rules: None,
+            extract: None,
+            url: None,
+        };
+        // Forge JSON：SRG 化客户端在 libraries 里
+        assert!(json_provides_client(&[
+            mk("net.minecraft:client:1.20.1-20230612.114412:srg"),
+            mk("net.minecraftforge:forge:1.20.1-47.4.28:universal"),
+        ]));
+        // Fabric JSON：直接引用客户端
+        assert!(json_provides_client(&[
+            mk("net.fabricmc:fabric-loader:0.16.0"),
+            mk("net.minecraft:client:1.20.1"),
+        ]));
+        // 原版 JSON：没有客户端 library，需要放原版 jar
+        assert!(!json_provides_client(&[mk("com.google.code.gson:gson:2.10")]));
+        assert!(!json_provides_client(&[]));
+    }
+
+    #[test]
+    fn build_classpath_omits_absent_client_jar() {
+        let libs = vec![PathBuf::from("C:/libs/a.jar")];
+        assert_eq!(
+            build_classpath(Some(Path::new("C:/versions/1.20.1/1.20.1.jar")), &libs),
+            "C:/versions/1.20.1/1.20.1.jar;C:/libs/a.jar"
+        );
+        assert_eq!(build_classpath(None, &libs), "C:/libs/a.jar");
     }
 
     #[test]

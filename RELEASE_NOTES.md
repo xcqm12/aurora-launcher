@@ -2,6 +2,7 @@
 
 - **自定义 MC 镜像源**：设置 → 下载源新增「自定义镜像」，填入镜像站地址（BMCLAPI 兼容布局，内置适配 mc.elingfeng.com），版本清单、client jar、assets、libraries、Forge/NeoForge/Fabric 安装器全部走镜像，官方自动兜底；映射规则有单测覆盖。
 - 配套自建镜像说明：镜像站用 nginx 磁盘缓存反代 Mojang/Forge 官方源，Forge 老版本（官方 maven 已下架）经 USTC BMCLAPI 节点兜底，每日 cron 从 files.minecraftforge.net 同步版本清单与安装器到本地。
+- **修复 Forge/NeoForge 启动即退**（module ResolutionException）：启动器此前无条件把原版 client jar（`1.20.1.jar`）放上 classpath；Forge 的模块系统把它当自动模块（`_1._20._1`），与 SRG 客户端模块 `minecraft` 导出同样的包，报「Modules minecraft and _1._20._1 export package net.minecraft.data」后退出。现检测版本 JSON 已含 `net.minecraft:client`（Forge SRG / Fabric）时不再放原版 jar，原版启动不受影响。
 - **修复：安装器卡死不再无限等待**：官方安装器内部网络请求没有超时，弱网下会永远挂在「运行安装器」；现每次尝试限时 15 分钟，超时自动终止并重试，错误信息带回安装器已输出的日志。
 - **修复：并发安装互斥**：同一实例同时只允许一个安装任务，重复点击「自动安装」会得到明确提示，不再出现两个安装器同时写同一目录；关闭界面后后台安装器进程也会被终止，不留僵尸 java。
 - **改进：安装器库预置**：Forge/NeoForge/Cleanroom 安装前先把 install_profile 声明的全部库经镜像候选（含自定义镜像）下载并做 SHA-1 校验，官方安装器检测到本地文件匹配即跳过自身无重试的下载，弱网安装成功率大幅提升。

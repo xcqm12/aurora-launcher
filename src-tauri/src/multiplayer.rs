@@ -174,17 +174,31 @@ async fn ensure_easytier(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     }
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let client = http_client(app)?;
-    let release: serde_json::Value = client
-        .get(EASYTIER_RELEASE_API)
-        .header("User-Agent", "AuroraLauncher/0.5")
-        .send()
-        .await
-        .map_err(|e| format!("获取 EasyTier 版本信息失败：{e}"))?
-        .error_for_status()
-        .map_err(|_| "EasyTier 版本接口返回错误".to_string())?
-        .json()
-        .await
-        .map_err(|e| e.to_string())?;
+    // GitHub API 有未认证限流（60 次/小时/IP），且可能被墙；走重试并透出原因。
+    let raw = crate::download_bytes_retry(
+        || {
+            client
+                .get(EASYTIER_RELEASE_API)
+                .header("User-Agent", "AuroraLauncher/0.5")
+                .header("Accept", "application/vnd.github+json")
+        },
+        "获取 EasyTier 版本信息",
+        crate::DOWNLOAD_ATTEMPTS,
+        |_, _| {},
+    )
+    .await?;
+    let release: serde_json::Value = serde_json::from_slice(&raw)
+        .map_err(|e| format!("EasyTier 版本信息解析失败：{e}"))?;
+    if release.get("message").is_some() && release.get("assets").is_none() {
+        // GitHub API 错误响应形如 {"message": "API rate limit exceeded ..."}
+        let message = release
+            .get("message")
+            .and_then(|value| value.as_str())
+            .unwrap_or("未知错误");
+        return Err(format!(
+            "EasyTier 版本接口返回错误：{message}（GitHub API 限流通常 1 小时后恢复，也可先手动放置 easytier-core.exe）"
+        ));
+    }
     let asset = release
         .get("assets")
         .and_then(|value| value.as_array())

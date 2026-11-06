@@ -31,3 +31,4 @@ mod/companion/.gradle/
 mod/companion/build/
 mod/companion/run/
 target-harden/
+src-tauri/target-fix/

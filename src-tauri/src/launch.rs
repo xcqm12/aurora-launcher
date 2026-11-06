@@ -870,14 +870,25 @@ fn build_classpath(client_jar: Option<&Path>, libraries: &[PathBuf]) -> String {
     entries.join(";")
 }
 
-/// 版本 JSON 的 libraries 是否已包含 Minecraft 客户端本体。
-/// Forge 用 SRG 化的 net.minecraft:client（模块名 minecraft），Fabric 直接引
-/// net.minecraft:client；两者都不需要再把原版 jar 放上 classpath——否则
-/// BootstrapLauncher 会把 1.20.1.jar 当自动模块（_1._20._1），与 minecraft
-/// 模块导出同样的包，触发 ResolutionException 启动失败。
-fn json_provides_client(libraries: &[Library]) -> bool {
-    libraries
+/// 继承型版本 JSON（inheritsFrom，即 Forge/NeoForge/Fabric 安装器生成）
+/// 是否需要把原版 client jar 放上 classpath。
+///
+/// 答案是否：Forge 的 BootstrapLauncher 用 --ignoreList + 模块层自己装配
+/// 客户端（SRG 化 client 不在 libraries 里，由 installer 的 patch 体系在
+/// 运行时生成）；原版 jar 若在 classpath 上会被当作自动模块
+/// `_1._20._1`，与生成的 `minecraft` 模块导出同样的包，触发
+/// ResolutionException。原版（无 inheritsFrom）才需要显式放上 client jar。
+fn json_provides_client(version: &VersionJson) -> bool {
+    // 继承型一律不放原版 jar（BootstrapLauncher 自行装配客户端）。
+    if version.inherits_from.is_some() {
+        return false;
+    }
+    // 原版 JSON 需要 client jar；防御：若其 libraries 已引用
+    // net.minecraft:client（未来格式变化），也不重复放。
+    !version
+        .libraries
         .iter()
+        .flatten()
         .any(|library| library.name.starts_with("net.minecraft:client"))
 }
 
@@ -1158,11 +1169,11 @@ pub async fn prepare(
     let assets_dir = assets_root.display().to_string();
     let natives = natives_dir.display().to_string();
     let libraries_dir = ctx.libraries_root.display().to_string();
-    let classpath = if json_provides_client(version.libraries.as_deref().unwrap_or(&[])) {
-        // Forge/Fabric 的版本 JSON 已含客户端本体，不能重复放原版 jar。
-        build_classpath(None, &classpath)
-    } else {
+    let classpath = if json_provides_client(&version) {
         build_classpath(Some(&client_jar), &classpath)
+    } else {
+        // 继承型版本（Forge/NeoForge/Fabric）：不放原版 jar，避免模块冲突。
+        build_classpath(None, &classpath)
     };
     let mut placeholders: HashMap<&str, String> = HashMap::new();
     placeholders.insert("auth_player_name", ctx.username.clone());
@@ -1444,19 +1455,30 @@ mod tests {
             extract: None,
             url: None,
         };
-        // Forge JSON：SRG 化客户端在 libraries 里
-        assert!(json_provides_client(&[
-            mk("net.minecraft:client:1.20.1-20230612.114412:srg"),
+        let vanilla = |libs: Vec<Library>| VersionJson {
+            inherits_from: None,
+            libraries: Some(libs),
+            ..Default::default()
+        };
+        let inherited = |libs: Vec<Library>| VersionJson {
+            inherits_from: Some("1.20.1".into()),
+            libraries: Some(libs),
+            ..Default::default()
+        };
+        // 原版 JSON：需要放原版 jar
+        assert!(json_provides_client(&vanilla(vec![mk("com.google.code.gson:gson:2.10")])));
+        assert!(json_provides_client(&vanilla(vec![])));
+        // Forge/NeoForge/Fabric（inheritsFrom）：BootstrapLauncher 自己装配
+        // 客户端，原版 jar 绝不能上 classpath（_1._20._1 模块冲突）。
+        assert!(!json_provides_client(&inherited(vec![
             mk("net.minecraftforge:forge:1.20.1-47.4.28:universal"),
-        ]));
-        // Fabric JSON：直接引用客户端
-        assert!(json_provides_client(&[
+        ])));
+        // Fabric 继承型即使列出 client library，也一视同仁不放原版 jar：
+        // 防止 _1._20._1 自动模块再次出现。
+        assert!(!json_provides_client(&inherited(vec![
             mk("net.fabricmc:fabric-loader:0.16.0"),
             mk("net.minecraft:client:1.20.1"),
-        ]));
-        // 原版 JSON：没有客户端 library，需要放原版 jar
-        assert!(!json_provides_client(&[mk("com.google.code.gson:gson:2.10")]));
-        assert!(!json_provides_client(&[]));
+        ])));
     }
 
     #[test]

@@ -2,7 +2,11 @@
 
 Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游戏启动与加载器自动安装、微软正版/LittleSkin/离线登录、整合包导入导出、实例内容管理、镜像加速、EasyTier 联机。历史版本更新记录见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
-## 0.6.4 更新内容
+## 0.6.5 更新内容
+
+- **修复 Forge/NeoForge/Fabric 启动即退**：继承型版本 JSON（`inheritsFrom`，安装器生成）不再把原版 client jar 放上 classpath。Forge 的 BootstrapLauncher 依据 `--ignoreList` 与模块层自行装配 SRG 客户端，原版 jar 在场会被当成自动模块 `_1._20._1`，与 `minecraft` 模块导出同样的包而报 `Modules minecraft and _1._20._1 export package ...`；原版启动不受影响。
+
+## 0.6.4 更新内容（历史）
 
 - **自定义 MC 镜像源**：下载源新增「自定义镜像」，填镜像站地址即可（BMCLAPI 兼容布局；默认示例为自建镜像 mc.elingfeng.com）。镜像覆盖版本清单/JSON、client jar、assets、libraries、Forge/NeoForge/Fabric maven；NeoForge 自动去掉 `/releases` 前缀，镜像优先、官方兜底。
 - 镜像站搭建：nginx `proxy_cache` 磁盘缓存反代官方源 + `sync_forge.py` 每日从 files.minecraftforge.net 同步 Forge 清单与安装器（官方 maven 已下架老版本文件，安装器经 USTC BMCLAPI 节点获取）。
@@ -196,7 +200,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 17. 模组启停最初按小写文件名重命名，会把 `JEI-1.20.jar` 变成 `jei-1.20.jar.disabled`：改为忽略大小写匹配后缀、保留原文件名（禁用只追加 `.disabled`，启用只去掉 `.disabled`），并加大小写保持测试。
 18. 游戏启动即退（exit 1 无输出）：AI 伙伴的 JVM 参数 `-Daurora.ai.port` 与值被拆成两个参数，JVM 把端口号当主类名（`java -Dfoo 8123 -version` 会报"找不到或无法加载主类 8123"，本机已复现验证）。修复为单个 `-Dkey=value`；smoke 测试此前传空 ai_args 所以没暴露。
 19. 下载中途断流（reqwest error decoding response body）：代理断流/CDN 掐连接，此前直接失败。已在所有流式下载（加载器/游戏文件/资源/EasyTier）统一加重试（每地址最多 3 次，600ms·n 退避，4xx 不重试），并给共享下载助手加了单测覆盖的友好错误文案。
-20. Forge 1.20.1 启动即退 `Modules minecraft and _1._20._1 export package net.minecraft.data`：原版 client jar 被放上 classpath，BootstrapLauncher 按 `ignoreList`（只含 `minecraft.jar`）过滤，`1.20.1.jar` 成为自动模块 `_1._20._1`，与 SRG 客户端模块 `minecraft` 包导出冲突。修复：版本 JSON 的 libraries 已含 `net.minecraft:client`（Forge/Fabric）时跳过原版 jar。
+20. Forge 1.20.1 启动即退 `Modules minecraft and _1._20._1 export package net.minecraft.data`：原版 client jar 被放上 classpath，BootstrapLauncher 按 `ignoreList`（只含 `minecraft.jar`）过滤，`1.20.1.jar` 成为自动模块 `_1._20._1`，与 SRG 客户端模块 `minecraft` 包导出冲突。修复（0.6.5）：带 `inheritsFrom` 的版本 JSON（Forge/NeoForge/Fabric 安装器生成）一律不放原版 jar——Forge 的 SRG 客户端不在 libraries 里（首次修复误判了这点，靠 client library 检测会漏），由安装器 patch 体系在运行时生成。
 
 ## 发布
 

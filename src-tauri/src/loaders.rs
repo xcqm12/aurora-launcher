@@ -6,9 +6,12 @@ use serde_json::Value;
 use tauri::Emitter;
 use sha1::{Digest as Sha1Digest, Sha1};
 use std::{
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Output, Stdio},
+    sync::{Mutex, OnceLock},
+    time::Duration,
 };
 
 #[derive(Debug, Serialize)]
@@ -42,6 +45,147 @@ fn emit_loader_progress(
             total,
         },
     );
+}
+
+/// 单次安装器子进程尝试的时限：官方安装器内部的网络请求没有超时，
+/// 连接僵死时进程会永不退出，这里兜底终止并交给下一次尝试。
+const INSTALLER_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(900);
+
+/// 正在进行的加载器安装（按实例互斥，防止两个安装器同时写同一个实例目录）。
+static INSTALL_IN_FLIGHT: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn file_sha1(path: &Path) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    Some(hex::encode(Sha1::digest(&bytes)))
+}
+
+/// tokio Command 版的 CREATE_NO_WINDOW（lib.rs 的 hide_console 只接受 std Command）。
+fn hide_installer_console(command: &mut tokio::process::Command) {
+    #[cfg(windows)]
+    {
+        command.creation_flags(0x0800_0000);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = command;
+    }
+}
+
+/// 运行安装器子进程并限时；超时终止进程，并把已捕获的（部分）输出带回便于诊断。
+/// 任务本身被取消（用户关闭界面等）时由 kill_on_drop 终止子进程，不再留僵尸安装器。
+async fn run_installer_with_timeout(
+    mut command: tokio::process::Command,
+    timeout: Duration,
+    what: &str,
+) -> Result<Output, String> {
+    use tokio::io::AsyncReadExt;
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command.kill_on_drop(true);
+    hide_installer_console(&mut command);
+    let mut child = command.spawn().map_err(|e| format!("{what}启动失败：{e}"))?;
+    let mut stdout_pipe = child.stdout.take().ok_or("无法读取安装器输出")?;
+    let mut stderr_pipe = child.stderr.take().ok_or("无法读取安装器输出")?;
+    let stdout_task = tokio::spawn(async move {
+        let mut buffer = Vec::new();
+        let _ = stdout_pipe.read_to_end(&mut buffer).await;
+        buffer
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut buffer = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut buffer).await;
+        buffer
+    });
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(status) => status.map_err(|e| format!("{what}执行失败：{e}"))?,
+        Err(_) => {
+            let _ = child.kill().await;
+            let stdout = stdout_task.await.unwrap_or_default();
+            let stderr = stderr_task.await.unwrap_or_default();
+            let log = format!(
+                "{}{}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            );
+            return Err(format!(
+                "{what}超时（{} 秒未完成，已终止），日志：{}",
+                timeout.as_secs(),
+                tail_log(&log, 2000)
+            ));
+        }
+    };
+    let stdout = stdout_task.await.unwrap_or_default();
+    let stderr = stderr_task.await.unwrap_or_default();
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+/// 运行安装器前把 install_profile.json 声明的全部库经镜像候选预置到本地：
+/// 官方安装器对已存在且哈希匹配的文件会跳过下载，这样它自身无重试的
+/// 内置下载器就不再暴露在网络抖动之下。
+async fn predownload_installer_libraries(
+    app: &tauri::AppHandle,
+    client: &reqwest::Client,
+    installer: &Path,
+    game_dir: &Path,
+    source: &str,
+    minecraft: &str,
+) -> Result<(), String> {
+    let file = fs::File::open(installer).map_err(|e| e.to_string())?;
+    let mut archive =
+        zip::ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| e.to_string())?;
+    let profile: Value = {
+        let mut entry = match archive.by_name("install_profile.json") {
+            Ok(entry) => entry,
+            Err(_) => return Ok(()), // 非 forge 系安装器没有 install_profile，跳过预置
+        };
+        serde_json::from_reader(&mut entry).map_err(|e| format!("解析安装器元数据失败：{e}"))?
+    };
+    let Some(libraries) = profile.get("libraries").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    let jobs: Vec<(String, String, Option<String>)> = libraries
+        .iter()
+        .filter_map(|lib| {
+            let artifact = lib.get("downloads")?.get("artifact")?;
+            let url = artifact.get("url")?.as_str()?;
+            let path = artifact.get("path")?.as_str()?;
+            if url.is_empty() || path.is_empty() {
+                return None;
+            }
+            Some((
+                url.to_string(),
+                path.to_string(),
+                artifact
+                    .get("sha1")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            ))
+        })
+        .collect();
+    for (index, (url, path, sha1)) in jobs.iter().enumerate() {
+        let target = game_dir.join("libraries").join(path);
+        let valid = match sha1 {
+            Some(expected) => file_sha1(&target)
+                .map(|hash| hash == expected.to_lowercase())
+                .unwrap_or(false),
+            None => target.exists(),
+        };
+        if valid {
+            continue;
+        }
+        let urls = crate::launch::candidates(url, source, minecraft);
+        let name = path.rsplit('/').next().unwrap_or(path).to_string();
+        emit_loader_progress(app, "预置安装库", &name, index as u64, jobs.len() as u64);
+        download_to_progressing(app, client, &urls, &target, sha1.as_deref(), 0, "预置安装库", &name)
+            .await?;
+    }
+    Ok(())
 }
 
 /// `download_to` with `loader-progress` events every 256 KiB; the largest
@@ -371,6 +515,27 @@ pub async fn install(
     loader: String,
     version: String,
 ) -> Result<LoaderInstallResult, String> {
+    let in_flight = INSTALL_IN_FLIGHT.get_or_init(|| Mutex::new(HashSet::new()));
+    let acquired = {
+        let mut guard = in_flight.lock().map_err(|_| "安装状态读取失败".to_string())?;
+        guard.insert(instance_id.clone())
+    };
+    if !acquired {
+        return Err("该实例已有安装任务正在进行，请等待完成后再试".into());
+    }
+    let result = install_inner(app, instance_id.clone(), loader, version).await;
+    if let Ok(mut guard) = in_flight.lock() {
+        guard.remove(&instance_id);
+    }
+    result
+}
+
+async fn install_inner(
+    app: tauri::AppHandle,
+    instance_id: String,
+    loader: String,
+    version: String,
+) -> Result<LoaderInstallResult, String> {
     if loader == "optifine" {
         return install_optifine(app, instance_id, version).await;
     }
@@ -427,11 +592,24 @@ pub async fn install(
     .await?;
     emit_loader_progress(&app, "校验安装器", &file_name, 1, 1);
 
+    // 先把安装器要用的库全部经镜像候选预置好，官方安装器见到本地文件
+    // 哈希匹配就会跳过下载，绕开它内部无重试、无超时的下载器。
+    if matches!(loader.as_str(), "forge" | "neoforge" | "cleanroom") {
+        predownload_installer_libraries(
+            &app,
+            &client,
+            &installer,
+            &game_dir,
+            &source,
+            &minecraft,
+        )
+        .await?;
+    }
+
     let java = crate::launch::find_java(instance.java_path.as_deref(), 8)?;
     let build_command = |attempt: u32| {
-        let mut command = Command::new(&java);
+        let mut command = tokio::process::Command::new(&java);
         command.current_dir(&game_dir);
-        crate::hide_console(&mut command);
         match loader.as_str() {
             "fabric" | "legacyfabric" => {
                 command
@@ -469,6 +647,7 @@ pub async fn install(
     let mut combined_log = String::new();
     let output = {
         let mut output = None;
+        let mut last_error: Option<String> = None;
         for attempt in 1..=3 {
             emit_loader_progress(
                 &app,
@@ -477,11 +656,22 @@ pub async fn install(
                 attempt as u64,
                 3,
             );
-            let mut command = build_command(attempt);
-            let result = tauri::async_runtime::spawn_blocking(move || command.output())
+            let result =
+                match run_installer_with_timeout(
+                    build_command(attempt),
+                    INSTALLER_ATTEMPT_TIMEOUT,
+                    "安装器",
+                )
                 .await
-                .map_err(|e| e.to_string())?
-                .map_err(|e| format!("安装器启动失败：{e}"))?;
+                {
+                    Ok(result) => result,
+                    Err(error) => {
+                        combined_log
+                            .push_str(&format!("--- 第 {attempt} 次尝试 ---\n{error}\n"));
+                        last_error = Some(error);
+                        continue;
+                    }
+                };
             let log = format!(
                 "{}{}",
                 String::from_utf8_lossy(&result.stdout),
@@ -521,7 +711,7 @@ pub async fn install(
                 output = Some(result);
             }
         }
-        output.ok_or_else(|| "安装器未产生输出".to_string())?
+        output.ok_or_else(|| last_error.unwrap_or_else(|| "安装器未产生输出".to_string()))?
     };
     let log = combined_log.clone();
     if !output.status.success() {
@@ -628,7 +818,7 @@ async fn install_optifine(
 
     let java = crate::launch::find_java(instance.java_path.as_deref(), 8)?;
     let separator = if cfg!(windows) { ";" } else { ":" };
-    let mut command = Command::new(&java);
+    let mut command = tokio::process::Command::new(&java);
     command
         .arg("-cp")
         .arg(format!(
@@ -638,11 +828,12 @@ async fn install_optifine(
         ))
         .arg("AuroraOptiFineDriver")
         .arg(&game_dir);
-    crate::hide_console(&mut command);
-    let output = tauri::async_runtime::spawn_blocking(move || command.output())
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| format!("OptiFine 安装器启动失败：{e}"))?;
+    let output = run_installer_with_timeout(
+        command,
+        INSTALLER_ATTEMPT_TIMEOUT,
+        "OptiFine 安装器",
+    )
+    .await?;
     let log = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),

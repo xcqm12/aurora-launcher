@@ -6,6 +6,9 @@ Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游
 
 - **自定义 MC 镜像源**：下载源新增「自定义镜像」，填镜像站地址即可（BMCLAPI 兼容布局；默认示例为自建镜像 mc.elingfeng.com）。镜像覆盖版本清单/JSON、client jar、assets、libraries、Forge/NeoForge/Fabric maven；NeoForge 自动去掉 `/releases` 前缀，镜像优先、官方兜底。
 - 镜像站搭建：nginx `proxy_cache` 磁盘缓存反代官方源 + `sync_forge.py` 每日从 files.minecraftforge.net 同步 Forge 清单与安装器（官方 maven 已下架老版本文件，安装器经 USTC BMCLAPI 节点获取）。
+- **安装器卡死修复**：官方安装器内部网络请求无超时，弱网会永远卡在「运行安装器」；现每次尝试限时 900 秒，超时终止并重试，错误信息带回安装器已输出的日志；关闭界面时后台安装器进程一并终止。
+- **并发安装互斥**：同一实例同时只允许一个安装任务，重复点击「自动安装」返回明确提示，不再出现两个安装器并发写同一目录。
+- **安装器库预置**：Forge/NeoForge/Cleanroom 安装前把 install_profile 声明的全部库经镜像候选（含自定义镜像）预置并做 SHA-1 校验，官方安装器检测到本地文件匹配即跳过其无重试的下载，弱网安装成功率显著提升。
 
 ## 0.6.3 更新内容（历史）
 
@@ -198,7 +201,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.6.3>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.6.4>
 - 分发下载页：<http://mcdles.us.ci/>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）
@@ -294,7 +297,7 @@ LittleSkin 是 Yggdrasil（authlib-injector）体系，和微软登录互不影�
 ## Cloudflare 锁区网关（qlmtest.dpdns.org）
 
 - 域名已托管在 Cloudflare（NS：fred/magali.ns.cloudflare.com），是独立 zone，不是 dpdns.org 的子记录。
-- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.6.3 Release 资产回源，`PATH_PREFIX=/aurora`。
+- `server/region-gate/` 预置了 `qlmtest.dpdns.org/aurora/*` 路由与 v0.6.4 Release 资产回源，`PATH_PREFIX=/aurora`。
 - 本地已验证：CN 请求 403，其他地区 200 且回源到正确的 Release 资产 URL。
 - **尚未部署**：需要 Cloudflare 凭据。你提供的 32 位 Key 是 Global API Key（需配邮箱、全账号权限，不推荐），建议在 Cloudflare 面板创建 Scoped Token（Workers Scripts:Edit、Zone Workers Routes:Edit、DNS:Edit、Zone:Read，范围限 qlmtest.dpdns.org），然后：
 

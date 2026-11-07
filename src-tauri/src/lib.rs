@@ -280,6 +280,28 @@ pub(crate) fn http_client(app: &tauri::AppHandle) -> Result<reqwest::Client, Str
     build_client(&read_settings(app).proxy)
 }
 
+/// 可选的 GitHub API 令牌：绕开匿名 60 次/小时的限流（认证后 5000/h）。
+/// 优先运行时环境变量 `AURORA_GITHUB_TOKEN`，其次编译期注入（option_env!，
+/// 与 AURORA_REGION_LOCK 同一模式）；都没有返回 None，请求保持匿名。
+/// 令牌只用于 `Authorization` 头，不落盘、不进日志。
+pub(crate) fn github_api_token() -> Option<String> {
+    let from_env = std::env::var("AURORA_GITHUB_TOKEN").ok().map(|v| v.trim().to_string());
+    (from_env.filter(|v| !v.is_empty()))
+        .or_else(|| option_env!("AURORA_GITHUB_TOKEN").map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
+}
+
+/// 给 GitHub API 请求挂认证头（有 token 才挂）。
+pub(crate) fn github_api_request(client: &reqwest::Client, url: &str) -> reqwest::RequestBuilder {
+    let builder = client
+        .get(url)
+        .header("User-Agent", "AuroraLauncher/0.6")
+        .header("Accept", "application/vnd.github+json");
+    match github_api_token() {
+        Some(token) => builder.header("Authorization", format!("Bearer {token}")),
+        None => builder,
+    }
+}
+
 pub(crate) fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -3055,6 +3077,55 @@ pub fn smoke_launch(
     };
     let result = tauri::async_runtime::block_on(launch::smoke(&context, seconds));
     result
+}
+
+#[cfg(test)]
+mod github_token_tests {
+    use super::*;
+
+    #[test]
+    fn github_token_empty_env_is_none() {
+        // 未设置时返回 None（匿名请求），不影响默认行为。
+        // 不在这里断言具体值——环境可能已有 AURORA_GITHUB_TOKEN；
+        // 只验证空字符串被过滤。
+        std::env::remove_var("AURORA_GITHUB_TOKEN");
+        let saved = std::env::var("AURORA_GITHUB_TOKEN");
+        std::env::set_var("AURORA_GITHUB_TOKEN", "");
+        assert_eq!(github_api_token(), None);
+        match saved {
+            Ok(value) => std::env::set_var("AURORA_GITHUB_TOKEN", value),
+            Err(_) => std::env::remove_var("AURORA_GITHUB_TOKEN"),
+        }
+    }
+
+    #[test]
+    fn github_api_request_sets_auth_header_only_with_token() {
+        let client = reqwest::Client::new();
+        // 匿名：只有 UA/Accept，无 Authorization。
+        let saved = std::env::var("AURORA_GITHUB_TOKEN");
+        std::env::remove_var("AURORA_GITHUB_TOKEN");
+        let request = github_api_request(&client, "https://api.github.com/repos/x/y")
+            .build()
+            .unwrap();
+        assert!(request.headers().get("Authorization").is_none());
+        assert_eq!(
+            request.headers().get("User-Agent").unwrap(),
+            "AuroraLauncher/0.6"
+        );
+        // 有 token：Authorization 为 Bearer 形式。
+        std::env::set_var("AURORA_GITHUB_TOKEN", "ghp_test123");
+        let request = github_api_request(&client, "https://api.github.com/repos/x/y")
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.headers().get("Authorization").unwrap(),
+            "Bearer ghp_test123"
+        );
+        match saved {
+            Ok(value) => std::env::set_var("AURORA_GITHUB_TOKEN", value),
+            Err(_) => std::env::remove_var("AURORA_GITHUB_TOKEN"),
+        }
+    }
 }
 
 #[cfg(test)]

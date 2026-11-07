@@ -1,4 +1,6 @@
 # Aurora Launcher v0.6.6
+- **GitHub API 可选认证**：EasyTier / Cleanroom 版本接口支持 `AURORA_GITHUB_TOKEN`（运行时环境变量优先，其次编译期注入），认证后限流从 60 次/小时提升到 5000 次/小时；未配置时保持匿名请求，行为不变。CI 构建注入 `AURORA_GITHUB_TOKEN` Secret。
+- **EasyTier / Cleanroom 版本接口重试**：接入统一重试助手，限流/断流不再一次失败即中止，错误响应的 message 原文透出。
 
 - **修复 v0.6.5 的启动修复未生效**：版本继承合并（`load_version` → `merge_child`）时 `inheritsFrom` 标记被丢弃，启动时仍判定为「原版」并把 `1.20.1.jar` 放上 classpath，Forge 继续报 `Modules minecraft and _1._20._1 export package ...` 并退出。现合并结果保留继承来源，并新增走真实合并路径的回归测试（原测试直接构造继承对象，未覆盖合并）。
 

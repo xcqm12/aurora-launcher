@@ -176,12 +176,7 @@ async fn ensure_easytier(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let client = http_client(app)?;
     // GitHub API 有未认证限流（60 次/小时/IP），且可能被墙；走重试并透出原因。
     let raw = crate::download_bytes_retry(
-        || {
-            client
-                .get(EASYTIER_RELEASE_API)
-                .header("User-Agent", "AuroraLauncher/0.5")
-                .header("Accept", "application/vnd.github+json")
-        },
+        || crate::github_api_request(&client, EASYTIER_RELEASE_API),
         "获取 EasyTier 版本信息",
         crate::DOWNLOAD_ATTEMPTS,
         |_, _| {},

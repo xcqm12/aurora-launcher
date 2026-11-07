@@ -416,9 +416,16 @@ async fn installer_url(
             "https://maven.neoforged.net/releases/net/neoforged/neoforge/{version}/neoforge-{version}-installer.jar"
         )),
         "cleanroom" => {
-            let raw = fetch(
-                &client,
-                "https://api.github.com/repos/CleanroomMC/Cleanroom/releases/latest",
+            let raw = crate::download_bytes_retry(
+                || {
+                    crate::github_api_request(
+                        &client,
+                        "https://api.github.com/repos/CleanroomMC/Cleanroom/releases/latest",
+                    )
+                },
+                "获取 Cleanroom 发布信息",
+                crate::DOWNLOAD_ATTEMPTS,
+                |_, _| {},
             )
             .await?;
             let release: Value = serde_json::from_slice(&raw)

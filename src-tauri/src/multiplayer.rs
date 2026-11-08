@@ -324,9 +324,12 @@ fn spawn_session(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     hide_console(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("启动 EasyTier 失败：{e}"))?;
+    let mut child = command.spawn().map_err(|e| {
+        // TUN 虚拟网卡需要管理员权限；启动失败最常见的根因。
+        format!(
+            "启动 EasyTier 失败：{e}（EasyTier 需要 TUN 虚拟网卡，请以管理员身份运行启动器后重试）"
+        )
+    })?;
     let pid = child.id();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -379,8 +382,18 @@ fn spawn_session(
                         },
                     );
                 }
+                // 对端建立 +1，断开 -1，保持计数与真实连接数一致。
                 if line.contains("new peer connection added") {
                     peers_counter.fetch_add(1, Ordering::SeqCst);
+                } else if line.contains("peer connection removed")
+                    || line.contains("peer connection lost")
+                {
+                    // 下溢防护：只在 >0 时减。
+                    peers_counter
+                        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+                            value.checked_sub(1)
+                        })
+                        .ok();
                 }
                 if let Ok(mut guard) = log.lock() {
                     guard.push(line.clone());
@@ -398,6 +411,7 @@ fn spawn_session(
     }
     {
         let app = app.clone();
+        let session_for_monitor = Arc::clone(&session);
         let running = Arc::clone(&session.running);
         let child_holder = Arc::clone(&session.child);
         thread::spawn(move || {
@@ -427,12 +441,38 @@ fn spawn_session(
                     line: format!("[Aurora] EasyTier 进程已退出（退出码 {exit_code:?}）"),
                 },
             );
+            // 常见失败给排查方向，而不是只留一个退出码。
+            let hint = match exit_code {
+                Some(code) if code != 0 => {
+                    let log = session_for_monitor.log_tail.lock().ok();
+                    let text = log
+                        .map(|guard| guard.join("
+"))
+                        .unwrap_or_default();
+                    if text.contains("Permission denied") || text.contains("access token") {
+                        "（提示：TUN 网卡需要管理员权限，请以管理员身份运行启动器）"
+                    } else if text.contains("Address already in use") {
+                        "（提示：端口被占用，可能是另一个 EasyTier 实例在运行）"
+                    } else if text.contains("connect") && text.contains("failed") {
+                        "（提示：共享节点不可达，检查网络或更换设置页里的联机共享节点）"
+                    } else {
+                        "（提示：查看上方日志；网络名/密钥不匹配也会导致退出）"
+                    }
+                }
+                _ => "",
+            };
+            if !hint.is_empty() {
+                let _ = app.emit("mp-log", MpLogPayload { line: format!("[Aurora]{hint}") });
+            }
         });
     }
     Ok(session.status())
 }
 
 pub async fn host(app: &tauri::AppHandle, state: &MultiplayerState) -> Result<MpStatus, String> {
+    if state.status().running {
+        return Err("已有联机会话在运行，请先停止当前会话".into());
+    }
     let exe = ensure_easytier(app).await?;
     let name = format!("aurora-{}", random_hex(6));
     let secret = random_hex(8);
@@ -464,6 +504,9 @@ pub async fn join(
     state: &MultiplayerState,
     code: &str,
 ) -> Result<MpStatus, String> {
+    if state.status().running {
+        return Err("已有联机会话在运行，请先停止当前会话".into());
+    }
     let (network_name, secret) = parse_room_code(code)?;
     let exe = ensure_easytier(app).await?;
     let peers = parse_peers(Some(crate::read_settings(app).mp_peers.as_str()));
@@ -543,5 +586,29 @@ mod tests {
         );
         assert_eq!(extract_dhcp_ip("unrelated log line"), None);
         assert_eq!(extract_dhcp_ip("dhcp ip changed new=Some(/24)"), None);
+    }
+
+    #[test]
+    fn peer_counter_never_underflows() {
+        // 断开事件可能多于建立事件（重连、日志重复）；计数下溢会 panic/wrap。
+        let counter = Arc::new(AtomicUsize::new(0));
+        counter.fetch_add(1, Ordering::SeqCst);
+        for _ in 0..3 {
+            counter
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+                    value.checked_sub(1)
+                })
+                .ok();
+        }
+        assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn host_join_guard_copy_matches_status_semantics() {
+        // host/join 的并发守卫依赖 status().running；保证状态语义与守卫一致。
+        let state = MultiplayerState::default();
+        assert!(!state.status().running);
+        // 未注册会话时 status() 必须返回 offline（running=false）。
+        assert!(state.status().log_tail.is_empty());
     }
 }

@@ -217,7 +217,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.6.6>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.6.7>
 - 分发下载页：<http://mcdles.us.ci/>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）

@@ -1,4 +1,5 @@
 # Aurora Launcher v0.6.6
+- **联机健壮性**：对端连接计数支持断开递减（不再虚高）；已有会话运行时阻止重复创建/加入；EasyTier 启动失败提示管理员权限要求，进程异常退出按日志给出具体排查方向（权限/端口占用/节点不可达/密钥不匹配）。
 - **GitHub API 可选认证**：EasyTier / Cleanroom 版本接口支持 `AURORA_GITHUB_TOKEN`（运行时环境变量优先，其次编译期注入），认证后限流从 60 次/小时提升到 5000 次/小时；未配置时保持匿名请求，行为不变。CI 构建注入 `AURORA_GITHUB_TOKEN` Secret。
 - **EasyTier / Cleanroom 版本接口重试**：接入统一重试助手，限流/断流不再一次失败即中止，错误响应的 message 原文透出。
 

@@ -1,8 +1,10 @@
-# Aurora Launcher v0.6.6
+# Aurora Launcher v0.6.7
 - **修复「虚拟 IP 一直在分配中」**：EasyTier 2.6.4 的 DHCP 模式在未能连接共享节点时不会创建 TUN 网卡（实测 70 秒无任何 dhcp 日志），虚拟 IP 永远停在「分配中…」。改为启动前确定地址：房主固定 10.144.144.1，客人从房间码确定性派生 10.144.144.2–254（FNV 哈希，同一房间码恒得同一 IP，与房主固定地址不冲突）；实测固定 IP 模式 15 秒内 TUN 就绪。
 - **联机健壮性**：对端连接计数支持断开递减（不再虚高）；已有会话运行时阻止重复创建/加入；EasyTier 启动失败提示管理员权限要求，进程异常退出按日志给出具体排查方向（权限/端口占用/节点不可达/密钥不匹配）。
 - **GitHub API 可选认证**：EasyTier / Cleanroom 版本接口支持 `AURORA_GITHUB_TOKEN`（运行时环境变量优先，其次编译期注入），认证后限流从 60 次/小时提升到 5000 次/小时；未配置时保持匿名请求，行为不变。CI 构建注入 `AURORA_GITHUB_TOKEN` Secret。
 - **EasyTier / Cleanroom 版本接口重试**：接入统一重试助手，限流/断流不再一次失败即中止，错误响应的 message 原文透出。
+
+# Aurora Launcher v0.6.6（历史）
 
 - **修复 v0.6.5 的启动修复未生效**：版本继承合并（`load_version` → `merge_child`）时 `inheritsFrom` 标记被丢弃，启动时仍判定为「原版」并把 `1.20.1.jar` 放上 classpath，Forge 继续报 `Modules minecraft and _1._20._1 export package ...` 并退出。现合并结果保留继承来源，并新增走真实合并路径的回归测试（原测试直接构造继承对象，未覆盖合并）。
 

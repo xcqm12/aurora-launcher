@@ -107,10 +107,13 @@ jobs:
           Copy-Item "artifacts/aurora-standard/aurora-launcher-standard-setup.exe" "release/Aurora-Launcher-$version-standard-x64-setup.exe"
           Copy-Item "artifacts/aurora-cn/aurora-launcher-cn.exe" "release/Aurora-Launcher-$version-cn-restricted-portable.exe"
           Copy-Item "artifacts/aurora-cn/aurora-launcher-cn-setup.exe" "release/Aurora-Launcher-$version-cn-restricted-x64-setup.exe"
-          Get-ChildItem release -Filter *.exe | ForEach-Object {
+          # LF 换行：Windows 的 Set-Content 默认 CRLF，会让 Linux/macOS 用户
+          # 的 `sha256sum -c` 报 "No such file or directory"。
+          $lines = Get-ChildItem release -Filter *.exe | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             "$hash  $($_.Name)"
-          } | Set-Content -Encoding ascii release/SHA256SUMS.txt
+          }
+          [IO.File]::WriteAllText("$PWD/release/SHA256SUMS.txt", ($lines -join "`n") + "`n")
           Get-ChildItem release | Format-Table Name, Length
 
       - uses: softprops/action-gh-release@v2

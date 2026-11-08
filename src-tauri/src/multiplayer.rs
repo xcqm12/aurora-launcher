@@ -55,6 +55,12 @@ struct Session {
 }
 
 impl Session {
+    fn set_virtual_ip(&self, ip: String) {
+        if let Ok(mut guard) = self.virtual_ip.lock() {
+            *guard = ip;
+        }
+    }
+
     fn status(&self) -> MpStatus {
         MpStatus {
             running: self.running.load(Ordering::SeqCst),
@@ -106,6 +112,15 @@ impl MultiplayerState {
             Some(session) if session.running.load(Ordering::SeqCst) => session.status(),
             _ => offline_status(),
         }
+    }
+
+    fn current_session(&self) -> Option<Arc<Session>> {
+        self.slot()
+            .lock()
+            .ok()?
+            .as_ref()
+            .filter(|session| session.running.load(Ordering::SeqCst))
+            .cloned()
     }
 
     fn kill_current(&self) {
@@ -259,6 +274,18 @@ async fn ensure_easytier(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         return Err("EasyTier 压缩包里没有 easytier-core.exe".into());
     }
     Ok(exe)
+}
+
+/// 从房间码确定性派生客人的虚拟 IP（10.144.144.2..254）。
+/// DHCP 模式在 EasyTier 2.6.4 上无对端时不创建 TUN（实测），导致
+/// 「虚拟 IP 一直在分配中」；改为启动前就确定地址，host 固定 .1。
+fn derive_guest_ipv4(code: &str) -> String {
+    let mut hash: u32 = 2166136261;
+    for byte in code.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(16777619);
+    }
+    format!("10.144.144.{}", 2 + hash % 253)
 }
 
 pub fn parse_room_code(code: &str) -> Result<(String, String), String> {
@@ -487,7 +514,7 @@ pub async fn host(app: &tauri::AppHandle, state: &MultiplayerState) -> Result<Mp
         "--instance-name".to_string(),
         "aurora".to_string(),
     ];
-    spawn_session(
+    let status = spawn_session(
         app,
         state,
         &exe,
@@ -496,7 +523,15 @@ pub async fn host(app: &tauri::AppHandle, state: &MultiplayerState) -> Result<Mp
         format!("{name}#{secret}"),
         args,
         peers,
-    )
+    )?;
+    // host 固定 10.144.144.1，无需等 DHCP 日志。
+    if let Some(session) = state.current_session() {
+        session.set_virtual_ip(HOST_IPV4.to_string());
+    }
+    Ok(MpStatus {
+        virtual_ip: HOST_IPV4.to_string(),
+        ..status
+    })
 }
 
 pub async fn join(
@@ -510,17 +545,18 @@ pub async fn join(
     let (network_name, secret) = parse_room_code(code)?;
     let exe = ensure_easytier(app).await?;
     let peers = parse_peers(Some(crate::read_settings(app).mp_peers.as_str()));
+    let ipv4 = derive_guest_ipv4(code.trim());
     let args = vec![
         "--network-name".to_string(),
         network_name.clone(),
         "--network-secret".to_string(),
         secret,
-        "--dhcp".to_string(),
-        "true".to_string(),
+        "--ipv4".to_string(),
+        ipv4.clone(),
         "--instance-name".to_string(),
         "aurora".to_string(),
     ];
-    spawn_session(
+    let status = spawn_session(
         app,
         state,
         &exe,
@@ -529,7 +565,15 @@ pub async fn join(
         code.trim().to_string(),
         args,
         peers,
-    )
+    )?;
+    // IP 是启动前确定的；DHCP 日志可能永远不来（无对端时 TUN 不创建）。
+    if let Some(session) = state.current_session() {
+        session.set_virtual_ip(ipv4.clone());
+    }
+    Ok(MpStatus {
+        virtual_ip: ipv4,
+        ..status
+    })
 }
 
 pub fn stop(state: &MultiplayerState) -> MpStatus {
@@ -586,6 +630,23 @@ mod tests {
         );
         assert_eq!(extract_dhcp_ip("unrelated log line"), None);
         assert_eq!(extract_dhcp_ip("dhcp ip changed new=Some(/24)"), None);
+    }
+
+    #[test]
+    fn guest_ipv4_is_deterministic_and_in_pool() {
+        let a = derive_guest_ipv4("aurora-abcdef#12345678");
+        let b = derive_guest_ipv4("aurora-abcdef#12345678");
+        assert_eq!(a, b, "同一房间码必须得到同一 IP");
+        let last: u32 = a.rsplit('.').next().unwrap().parse().unwrap();
+        assert!((2..=254).contains(&last), "IP 池 10.144.144.2..254，实际 {a}");
+        // 不同房间码大概率不同 IP（抽查 50 个，至少 30 个唯一）。
+        let mut seen = std::collections::HashSet::new();
+        for index in 0..50u32 {
+            seen.insert(derive_guest_ipv4(&format!("code-{index}")));
+        }
+        assert!(seen.len() >= 30, "哈希过于集中: {}", seen.len());
+        // host 固定 .1，guest 池从 .2 开始——永不冲突。
+        assert_ne!(a, format!("10.144.144.1"));
     }
 
     #[test]

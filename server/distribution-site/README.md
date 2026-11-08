@@ -21,7 +21,16 @@
 | 入场动画 | `IntersectionObserver` + `.reveal` 位移淡入，分级延迟 `d1/d2/d3` |
 | 卡片光斑 | `pointermove` 写入 `--mx/--my`，径向渐变跟随鼠标 |
 | 数字滚动 | 同类 IntersectionObserver 触发，缓动计数 |
-| 无障碍 | 全部动画在 `prefers-reduced-motion: reduce` 下关闭 |
+| 星座连线 + 流星 | canvas 粒子近距连线（O(n²) 距离衰减 alpha），2.6–6.8s 随机流星带渐变尾迹 |
+| 逐字标题入场 | `<h1>` 按字符拆分，translateY+rotateX+blur 依次入场，渐变字符叠加 shimmer |
+| Hero 轨道装饰 | 双环旋转 + 沿轨道运行的发光卫星点 |
+| 鼠标跟随辉光 | `#glow` 大径向渐变以 lerp 0.08 缓动跟随指针（仅 pointer:fine） |
+| 卡片 3D tilt | hover 时按指针位置 rotateX/rotateY（±7°），离开回弹 |
+| 按钮扫光/脉冲 | 主按钮周期性斜向扫光；推荐下载按钮外圈脉冲光圈 |
+| 区块发光线 | `h2.sec::after` 渐变线随 reveal 从 0 展开并发光 |
+| scrollspy | IntersectionObserver 高亮导航当前区块 |
+| 滚动视差 | 背景光斑层随滚动 0.07 系数位移（容器留 -14% 余量防露底） |
+| 无障碍 | 全部动画在 `prefers-reduced-motion: reduce` 下关闭（含逐字标题强制可见、glow 隐藏） |
 
 ## 部署
 

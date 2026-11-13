@@ -237,6 +237,9 @@ export type ServerInput = {
 export type ConfigEntry = { path: string; size: number; modified: number };
 export type ConfigFile = { path: string; content: string };
 
+export type MusicTrack = { file: string; name: string; size: number };
+export type MusicChunk = { data: string; offset: number; total: number };
+
 export type ChangelogEntry = {
   version: string;
   current: boolean;
@@ -403,4 +406,10 @@ export const api = {
   configWrite: (instanceId: string, path: string, content: string) =>
     invoke<void>("instance_config_write", { instanceId, path, content }),
   changelog: () => invoke<Changelog>("app_changelog"),
+  pickMusicFiles: () => invoke<string[]>("pick_music_files"),
+  musicImport: (paths: string[]) => invoke<MusicTrack[]>("music_import", { paths }),
+  musicList: () => invoke<MusicTrack[]>("music_list"),
+  musicRead: (file: string, offset: number) =>
+    invoke<MusicChunk>("music_read", { file, offset }),
+  musicDelete: (file: string) => invoke<void>("music_delete", { file }),
 };

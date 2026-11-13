@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
@@ -25,6 +25,7 @@ import {
   LoaderCircle,
   Map as MapIcon,
   Monitor,
+  Music2,
   PackageOpen,
   Play,
   Plus,
@@ -46,6 +47,7 @@ import {
   DeviceCode,
   AppSettings,
   Changelog,
+  MusicTrack,
   ChangelogEntry,
   ConfigEntry,
   ContentItem,
@@ -69,7 +71,7 @@ import {
   AiSettingsView,
 } from "./api";
 
-type View = "home" | "browse" | "instances" | "loaders" | "settings" | "changelog";
+type View = "home" | "browse" | "instances" | "loaders" | "settings" | "changelog" | "music";
 type ResourceKind = "mod" | "modpack" | "datapack" | "resourcepack" | "shader" | "world";
 type LoaderId =
   | "vanilla"
@@ -300,6 +302,7 @@ function App() {
     loaders: `${loaderLabel(loaderFocus)} 安装`,
     settings: "设置",
     changelog: "更新内容",
+    music: "音乐舱",
   };
 
   return (
@@ -361,6 +364,12 @@ function App() {
             label="游戏实例"
             count={instances.length}
             onClick={() => setView("instances")}
+          />
+          <SideButton
+            active={view === "music"}
+            icon={Music2}
+            label="音乐舱"
+            onClick={() => setView("music")}
           />
           <SideButton
             active={view === "changelog"}
@@ -505,6 +514,8 @@ function App() {
             onRefresh={refreshInstances}
           />
         )}
+
+        {view === "music" && <MusicDeck onNotice={setNotice} />}
 
         {view === "changelog" && (
           <ChangelogPage currentVersion={info?.version ?? ""} onNotice={setNotice} />
@@ -4221,6 +4232,364 @@ function SettingsPage({
           <strong>{info?.region_locked ? "当前发行版已限制下载" : "无限制"}</strong>
         </div>
       </section>
+    </div>
+  );
+}
+
+function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
+  const [tracks, setTracks] = useState<MusicTrack[]>([]);
+  const [cur, setCur] = useState(-1);
+  const [playing, setPlaying] = useState(false);
+  const [title, setTitle] = useState("未播放");
+  const [pos, setPos] = useState({ cur: 0, end: 0 });
+  const [loading, setLoading] = useState(false);
+  const [vol, setVol] = useState(80);
+
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const urlRef = useRef("");
+  const ctxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const barsRef = useRef<HTMLDivElement | null>(null);
+  const modeRef = useRef(0);
+
+  const loadTrack = useCallback(
+    async (index: number) => {
+      const tr = tracks[index];
+      if (!tr) return;
+      setLoading(true);
+      try {
+        // 分块读回音频字节，拼成 Blob 播放。
+        let offset = 0;
+        const parts: Uint8Array[] = [];
+        for (;;) {
+          const chunk = await api.musicRead(tr.file, offset);
+          if (!chunk.data) break;
+          const bin = atob(chunk.data);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          parts.push(bytes);
+          offset = chunk.offset;
+          if (offset >= chunk.total) break;
+        }
+        const blob = new Blob(parts as BlobPart[]);
+        if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+        urlRef.current = URL.createObjectURL(blob);
+        const audio = audioRef.current;
+        if (!audio) return;
+        audio.src = urlRef.current;
+        audio.play().catch(() => onNotice("浏览器阻止了自动播放，请再按一次播放"));
+        setCur(index);
+        setTitle(tr.name);
+        setPlaying(true);
+      } catch (error) {
+        onNotice(String(error));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [tracks, onNotice],
+  );
+
+  const refresh = useCallback(async () => {
+    try {
+      setTracks(await api.musicList());
+    } catch (error) {
+      onNotice(String(error));
+    }
+  }, [onNotice]);
+
+  useEffect(() => {
+    void refresh();
+    return () => {
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    };
+  }, [refresh]);
+
+  const importMusic = async () => {
+    try {
+      const paths = await api.pickMusicFiles();
+      if (!paths.length) return;
+      const added = await api.musicImport(paths);
+      await refresh();
+      onNotice(added.length ? `已导入 ${added.length} 首音乐` : "所选文件没有可导入的音频");
+    } catch (error) {
+      onNotice(String(error));
+    }
+  };
+
+  const removeTrack = async (file: string) => {
+    try {
+      await api.musicDelete(file);
+      if (tracks[cur]?.file === file) {
+        audioRef.current?.pause();
+        setPlaying(false);
+        setCur(-1);
+        setTitle("未播放");
+      }
+      await refresh();
+    } catch (error) {
+      onNotice(String(error));
+    }
+  };
+
+  const toggle = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (cur < 0) {
+      if (tracks.length) void loadTrack(0);
+      return;
+    }
+    if (audio.paused) {
+      void audio.play();
+      setPlaying(true);
+    } else {
+      audio.pause();
+      setPlaying(false);
+    }
+  };
+
+  const step = (delta: number) => {
+    if (!tracks.length) return;
+    const nextIndex = (cur + delta + tracks.length) % tracks.length;
+    void loadTrack(nextIndex);
+  };
+
+  /* Web Audio 图 + 可视化循环 */
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    let raf = 0;
+    let ctx: AudioContext | null = null;
+    let analyser: AnalyserNode | null = null;
+    const ensureGraph = () => {
+      if (ctx) return;
+      try {
+        ctx = new AudioContext();
+        const source = ctx.createMediaElementSource(audio);
+        analyser = ctx.createAnalyser();
+        analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0.82;
+        source.connect(analyser);
+        analyser.connect(ctx.destination);
+        ctxRef.current = ctx;
+        analyserRef.current = analyser;
+      } catch {
+        ctx = null;
+      }
+    };
+    const onPlay = () => {
+      ensureGraph();
+      if (ctx?.state === "suspended") void ctx.resume();
+      setPlaying(true);
+    };
+    const onPause = () => setPlaying(false);
+    const onEnded = () => step(1);
+    const onTime = () => {
+      if (isFinite(audio.duration)) {
+        setPos({ cur: audio.currentTime, end: audio.duration });
+      }
+    };
+    audio.addEventListener("play", onPlay);
+    audio.addEventListener("pause", onPause);
+    audio.addEventListener("ended", onEnded);
+    audio.addEventListener("timeupdate", onTime);
+
+    const canvas = canvasRef.current;
+    const vctx = canvas?.getContext("2d") ?? null;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let W = 0, H = 0;
+    const resize = () => {
+      if (!canvas) return;
+      const r = canvas.getBoundingClientRect();
+      W = Math.floor(r.width); H = Math.floor(r.height);
+      canvas.width = Math.floor(W * dpr); canvas.height = Math.floor(H * dpr);
+      vctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    resize();
+    window.addEventListener("resize", resize);
+
+    const freq = new Uint8Array(1024);
+    const loop = (t: number) => {
+      raf = requestAnimationFrame(loop);
+      if (!vctx || !canvas) return;
+      vctx.clearRect(0, 0, W, H);
+      vctx.strokeStyle = "rgba(95,232,255,.05)";
+      vctx.lineWidth = 1;
+      for (let gx = 0; gx < W; gx += 44) { vctx.beginPath(); vctx.moveTo(gx, 0); vctx.lineTo(gx, H); vctx.stroke(); }
+      for (let gy = 0; gy < H; gy += 44) { vctx.beginPath(); vctx.moveTo(0, gy); vctx.lineTo(W, gy); vctx.stroke(); }
+
+      const an = analyserRef.current;
+      if (an) an.getByteFrequencyData(freq);
+      const playing2 = !audio.paused;
+      const energy = playing2 && an ? freq.slice(2, 24).reduce((a, b) => a + b, 0) / (22 * 255) : 0.05;
+
+      const bars = 56, gap = 3;
+      const bw = (W - gap * (bars - 1)) / bars;
+      for (let b = 0; b < bars; b++) {
+        const lo = Math.floor(b * 2.2);
+        const v = playing2 && an
+          ? freq.slice(lo, lo + 3).reduce((a, x) => a + x, 0) / (3 * 255)
+          : 0.05 + 0.04 * Math.sin(t / 700 + b / 4);
+        const bh = Math.max(3, v * (H - 52));
+        const x = b * (bw + gap), y = H - 26 - bh;
+        const grad = vctx.createLinearGradient(0, y, 0, H - 26);
+        grad.addColorStop(0, "rgba(95,232,255,.95)");
+        grad.addColorStop(0.6, "rgba(126,150,255,.75)");
+        grad.addColorStop(1, "rgba(143,124,255,.28)");
+        vctx.fillStyle = grad;
+        vctx.fillRect(x, y, bw, bh);
+        vctx.fillStyle = "rgba(205,246,255,.7)";
+        vctx.fillRect(x, y - 3, bw, 2);
+      }
+      vctx.fillStyle = "rgba(95,232,255,.35)";
+      vctx.fillRect(0, H - 25, W, 1.4);
+
+      if (barsRef.current) {
+        Array.from(barsRef.current.children).forEach((el, i) => {
+          const el2 = el as HTMLElement;
+          const lo = 2 + i * 3;
+          const v = playing2 && an
+            ? freq.slice(lo, lo + 3).reduce((a, x) => a + x, 0) / (3 * 255)
+            : 0.12;
+          el2.style.height = Math.max(10, Math.min(100, v * 160)).toFixed(0) + "%";
+        });
+      }
+      void energy;
+    };
+    raf = requestAnimationFrame(loop);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", resize);
+      audio.removeEventListener("play", onPlay);
+      audio.removeEventListener("pause", onPause);
+      audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("timeupdate", onTime);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tracks, cur]);
+
+  const fmt = (sec: number) => {
+    if (!isFinite(sec)) return "0:00";
+    const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+    return `${m}:${s < 10 ? "0" : ""}${s}`;
+  };
+
+  return (
+    <div className="page-stack">
+      <section className="section-heading">
+        <div>
+          <span className="eyebrow">SOUND DECK</span>
+          <h3>音乐舱</h3>
+          <p className="section-subtitle">
+            导入你喜欢的本地音乐（mp3 / flac / ogg / wav 等），文件复制到启动器数据目录持久保存，仅在本机播放。
+          </p>
+        </div>
+        <button className="primary-button" onClick={() => void importMusic()}>
+          <Plus size={16} /> 导入音乐
+        </button>
+      </section>
+
+      <div className="music-grid">
+        <div className="music-panel">
+          <div className="panel-h">
+            <span className="led" />
+            VISUALIZER · SPECTRUM
+          </div>
+          <div className="viz">
+            <canvas ref={canvasRef} />
+          </div>
+          <div className="now">
+            <div className={`disc ${playing ? "spinning" : ""}`}>✦</div>
+            <div className="now-meta">
+              <div className="now-title" title={title}>{title}</div>
+              <div className="now-artist">
+                {loading ? "加载中…" : playing ? "PLAYING" : cur >= 0 ? "PAUSED" : "STANDBY"} · LOCAL FILE
+              </div>
+              <div className="bars" ref={barsRef} aria-hidden="true" />
+            </div>
+          </div>
+          <div className="ctrl">
+            <button className="ghost-button" onClick={() => step(-1)} title="上一首">⏮</button>
+            <button className="primary-button" onClick={toggle} title="播放 / 暂停">
+              {playing ? "⏸" : "▶"}
+            </button>
+            <button className="ghost-button" onClick={() => step(1)} title="下一首">⏭</button>
+            <div className="seek">
+              <span>{fmt(pos.cur)}</span>
+              <input
+                type="range"
+                min={0}
+                max={1000}
+                value={pos.end ? (pos.cur / pos.end) * 1000 : 0}
+                style={{ ["--p" as string]: pos.end ? `${(pos.cur / pos.end) * 100}%` : "0%" }}
+                onChange={(e) => {
+                  const audio = audioRef.current;
+                  if (audio && isFinite(audio.duration)) {
+                    audio.currentTime = (Number(e.target.value) / 1000) * audio.duration;
+                  }
+                }}
+              />
+              <span>{fmt(pos.end)}</span>
+            </div>
+            <div className="vol">
+              VOL
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={vol}
+                style={{ ["--p" as string]: `${vol}%` }}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setVol(v);
+                  if (audioRef.current) audioRef.current.volume = v / 100;
+                }}
+              />
+            </div>
+          </div>
+          <audio ref={audioRef} hidden />
+        </div>
+
+        <div className="music-panel">
+          <div className="panel-h">
+            <span className="led" />
+            PLAYLIST · {tracks.length} TRACKS
+          </div>
+          {tracks.length === 0 ? (
+            <div className="content-empty">
+              曲库为空——点上方「导入音乐」选择你喜欢的音频文件
+            </div>
+          ) : (
+            <div className="track-list">
+              {tracks.map((tr, i) => (
+                <div
+                  key={tr.file}
+                  className={`track-row ${i === cur ? "cur" : ""}`}
+                  onClick={() => void loadTrack(i)}
+                >
+                  <span className="track-no">{i === cur ? "♪" : String(i + 1).padStart(2, "0")}</span>
+                  <span className="track-name" title={tr.file}>{tr.name}</span>
+                  <span className="track-size">{(tr.size / 1024 / 1024).toFixed(1)} MB</span>
+                  <button
+                    className="track-rm"
+                    title="移除"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void removeTrack(tr.file);
+                    }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="security-note">
+            音乐文件复制到数据目录 <code>music/</code> 下，仅在本机播放，不上传；上限 2000 首、单首 200 MB。
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

@@ -4,6 +4,7 @@ mod changelog;
 mod content;
 mod launch;
 mod loaders;
+mod music;
 mod multiplayer;
 mod packs;
 mod yggdrasil;
@@ -3337,6 +3338,11 @@ pub fn run() {
             content::instance_config_write,
             pick_content_file,
             pick_save_export,
+            music::pick_music_files,
+            music::music_import,
+            music::music_list,
+            music::music_read,
+            music::music_delete,
             changelog::app_changelog
         ])
         .run(tauri::generate_context!())

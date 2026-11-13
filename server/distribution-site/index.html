@@ -150,6 +150,38 @@ details a{color:var(--accent2)}
   border:1px solid rgba(126,167,255,.25);border-radius:12px;padding:18px 20px;font-size:13.2px;color:#b9c5dd;line-height:1.9}
 .note b{color:#fff}
 
+/* ===== 悬浮迷你播放器 ===== */
+#mini-player{position:fixed;right:26px;bottom:26px;z-index:56;width:308px;
+  background:rgba(8,12,24,.92);border:1px solid rgba(95,232,255,.4);border-radius:14px;
+  backdrop-filter:blur(14px);box-shadow:0 14px 44px rgba(0,0,0,.55),0 0 26px rgba(95,232,255,.12);
+  overflow:hidden;transition:transform .35s cubic-bezier(.2,.7,.2,1),opacity .35s,border-color .25s}
+#mini-player.hidden{transform:translateY(26px) scale(.96);opacity:0;pointer-events:none}
+#mini-player .mp-head{display:flex;align-items:center;gap:9px;padding:10px 12px 8px}
+#mini-player .mp-head .eq3{display:flex;gap:2px;align-items:flex-end;height:12px}
+#mini-player .mp-head .eq3 i{width:3px;background:var(--cyan);border-radius:1px;animation:mpEq 0.9s ease-in-out infinite}
+#mini-player .mp-head .eq3 i:nth-child(2){animation-delay:.2s}
+#mini-player .mp-head .eq3 i:nth-child(3){animation-delay:.45s}
+#mini-player.paused .mp-head .eq3 i{animation-play-state:paused;height:30%!important}
+@keyframes mpEq{0%,100%{height:30%}50%{height:100%}}
+#mini-player .mp-title{flex:1;min-width:0;font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#mini-player .mp-src{font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:.14em}
+#mini-player .mp-close{border:0;background:none;color:var(--muted);cursor:pointer;font-size:14px;padding:2px 4px;transition:.15s}
+#mini-player .mp-close:hover{color:#f08c9b}
+#mini-player .mp-prog{height:3px;background:rgba(95,232,255,.14);cursor:pointer}
+#mini-player .mp-prog i{display:block;height:100%;width:0%;
+  background:linear-gradient(90deg,var(--cyan),var(--violet));box-shadow:0 0 8px rgba(95,232,255,.5)}
+#mini-player .mp-ctrl{display:flex;align-items:center;gap:6px;padding:8px 12px 11px}
+#mini-player .mp-btn{width:30px;height:30px;border-radius:50%;border:1px solid rgba(95,232,255,.35);
+  background:rgba(95,232,255,.08);color:var(--cyan);cursor:pointer;font-size:11px;
+  display:grid;place-items:center;transition:.16s}
+#mini-player .mp-btn:hover{background:rgba(95,232,255,.18);box-shadow:0 0 14px rgba(95,232,255,.3)}
+#mini-player .mp-btn.main{width:36px;height:36px;font-size:13px;
+  background:linear-gradient(135deg,rgba(95,232,255,.9),rgba(143,124,255,.9));color:#03101c;border:0}
+#mini-player .mp-time{font-family:var(--mono);font-size:9.5px;color:var(--muted)}
+#mini-player .mp-open{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--cyan);
+  text-decoration:none;letter-spacing:.1em;border:1px solid rgba(95,232,255,.3);border-radius:6px;padding:4px 8px;transition:.15s}
+#mini-player .mp-open:hover{background:rgba(95,232,255,.12)}
+
 /* ===== 悬浮音乐舱按钮 ===== */
 #music-fab{position:fixed;right:26px;bottom:26px;z-index:55;display:flex;align-items:center;gap:0;
   height:52px;border-radius:99px;text-decoration:none;overflow:hidden;
@@ -603,6 +635,25 @@ nav a.link.cur::after{width:100%}
     </div>
   </section>
 
+  <div id="mini-player" class="hidden" role="region" aria-label="迷你播放器">
+    <div class="mp-head">
+      <span class="eq3" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="mp-title" id="mp-title">Aurora Sound Deck</span>
+      <span class="mp-src">LOCAL</span>
+      <button class="mp-close" id="mp-close" title="收起">✕</button>
+    </div>
+    <div class="mp-prog" id="mp-prog" title="点击跳转进度">
+      <i id="mp-bar"></i>
+    </div>
+    <div class="mp-ctrl">
+      <button class="mp-btn" id="mp-prev" title="上一首">⏮</button>
+      <button class="mp-btn main" id="mp-play" title="播放 / 暂停">▶</button>
+      <button class="mp-btn" id="mp-next" title="下一首">⏭</button>
+      <span class="mp-time" id="mp-time">0:00 / 0:00</span>
+      <a class="mp-open" href="music.html">音乐舱 ↗</a>
+    </div>
+  </div>
+
   <a id="music-fab" href="music.html" aria-label="进入音乐舱" title="Aurora 音乐舱">
     <span class="fab-note" aria-hidden="true">
       <svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
@@ -634,6 +685,87 @@ nav a.link.cur::after{width:100%}
   }
   window.addEventListener("scroll", onScroll, { passive: true });
   onScroll();
+
+  /* ---------- 迷你播放器（与音乐舱共享曲库） ---------- */
+  var mp = document.getElementById("mini-player");
+  var mpPlay = document.getElementById("mp-play");
+  var mpBar = document.getElementById("mp-bar");
+  var mpTime = document.getElementById("mp-time");
+  var mpTitle = document.getElementById("mp-title");
+  if (mp) {
+    var mAudio = new Audio();
+    mAudio.preload = "metadata";
+    mAudio.volume = 0.75;
+    var mTracks = [], mCur = -1, mUrl = "";
+
+    function fmtT(sec) {
+      if (!isFinite(sec)) sec = 0;
+      var m = Math.floor(sec / 60), x = Math.floor(sec % 60);
+      return m + ":" + (x < 10 ? "0" : "") + x;
+    }
+    function mpUI() {
+      mpPlay.textContent = mAudio.paused ? "▶" : "⏸";
+      mp.classList.toggle("paused", mAudio.paused);
+    }
+    function mpPlayIndex(i) {
+      if (i < 0 || i >= mTracks.length) return;
+      mCur = i;
+      var tr = mTracks[i];
+      mpTitle.textContent = tr.name;
+      if (mUrl) URL.revokeObjectURL(mUrl);
+      mUrl = URL.createObjectURL(tr.blob);
+      mAudio.src = mUrl;
+      var go = function () {
+        mAudio.removeEventListener("canplay", go);
+        mAudio.play().then(mpUI).catch(function () {
+          mpPlay.textContent = "▶";
+          toast("已就绪：" + tr.name + "（迷你播放器）");
+        });
+      };
+      mAudio.addEventListener("canplay", go, { once: true });
+      mAudio.load();
+      mpUI();
+    }
+    function mpToggle() {
+      if (mCur < 0) { if (mTracks.length) mpPlayIndex(0); else toast("先在音乐舱导入音乐"); return; }
+      if (mAudio.paused) mAudio.play().then(mpUI).catch(function () {}); else { mAudio.pause(); mpUI(); }
+    }
+    mpPlay.addEventListener("click", mpToggle);
+    document.getElementById("mp-prev").addEventListener("click", function () { if (mTracks.length) mpPlayIndex((mCur - 1 + mTracks.length) % mTracks.length); });
+    document.getElementById("mp-next").addEventListener("click", function () { if (mTracks.length) mpPlayIndex((mCur + 1) % mTracks.length); });
+    document.getElementById("mp-close").addEventListener("click", function () {
+      mp.classList.add("hidden");
+      mAudio.pause();
+      localStorage.setItem("aurora-mp-closed", "1");
+    });
+    document.getElementById("mp-prog").addEventListener("click", function (e) {
+      if (!isFinite(mAudio.duration)) return;
+      var r = e.currentTarget.getBoundingClientRect();
+      mAudio.currentTime = ((e.clientX - r.left) / r.width) * mAudio.duration;
+    });
+    mAudio.addEventListener("timeupdate", function () {
+      if (!isFinite(mAudio.duration)) return;
+      mpBar.style.width = ((mAudio.currentTime / mAudio.duration) * 100).toFixed(1) + "%";
+      mpTime.textContent = fmtT(mAudio.currentTime) + " / " + fmtT(mAudio.duration);
+    });
+    mAudio.addEventListener("ended", function () {
+      if (mTracks.length) mpPlayIndex((mCur + 1) % mTracks.length);
+    });
+
+    /* 与音乐舱（music.html）同源共享 IndexedDB 曲库 */
+    var rq = indexedDB.open("aurora-sound-deck", 1);
+    rq.onsuccess = function () {
+      var store = rq.result.transaction("tracks", "readonly").objectStore("tracks").getAll();
+      store.onsuccess = function () {
+        mTracks = (store.result || []).sort(function (a, b) { return a.name > b.name ? 1 : -1; });
+        if (!mTracks.length || localStorage.getItem("aurora-mp-closed") === "1") return;
+        mpTitle.textContent = mTracks.length + " 首曲目待播 · 点击 ▶";
+        setTimeout(function () { mp.classList.add("show"), mp.classList.remove("hidden"); }, 900);
+        /* show 类未定义样式时直接用 hidden 反向控制 */
+        mp.classList.remove("hidden");
+      };
+    };
+  }
 
   /* ---------- 音乐舱悬浮按钮：滚过 hero 后出现 ---------- */
   var fab = document.getElementById("music-fab");

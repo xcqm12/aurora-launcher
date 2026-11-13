@@ -150,6 +150,26 @@ header{position:sticky;top:0;z-index:50;backdrop-filter:blur(16px);
 .tr:hover .rm{opacity:.8}
 .tr .rm:hover{color:var(--pink)}
 
+/* ===== 歌词 ===== */
+.lyrics-panel{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
+.lyrics-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.lyrics-head .t{font-family:var(--mono);font-size:10px;letter-spacing:.22em;color:var(--cyan)}
+.lyrics-head .acts{display:flex;gap:8px}
+.lyrics-head button{border:1px solid rgba(95,232,255,.3);background:rgba(95,232,255,.06);
+  color:var(--cyan);font-size:10.5px;padding:4px 9px;border-radius:6px;cursor:pointer;transition:.15s;font-family:var(--mono)}
+.lyrics-head button:hover{background:rgba(95,232,255,.14)}
+.lyrics{max-height:190px;overflow-y:auto;padding:8px 12px;border-radius:10px;
+  background:rgba(4,6,14,.6);border:1px solid rgba(95,232,255,.12);scroll-behavior:smooth;
+  mask-image:linear-gradient(180deg,transparent 0,#000 14%,#000 86%,transparent)}
+.lyrics::-webkit-scrollbar{width:6px}
+.lyrics::-webkit-scrollbar-thumb{background:rgba(95,232,255,.2);border-radius:3px}
+.ly-line{padding:5px 8px;font-size:13px;line-height:1.7;color:var(--muted);border-radius:7px;
+  transition:color .3s,font-size .3s,background .3s;cursor:default}
+.ly-line.active{color:#eaffff;font-size:14.5px;font-weight:700;
+  background:linear-gradient(90deg,rgba(95,232,255,.14),rgba(143,124,255,.08));
+  text-shadow:0 0 18px rgba(95,232,255,.5)}
+.ly-empty{color:var(--muted);font-size:12px;text-align:center;padding:16px 0}
+
 /* ===== 提示 ===== */
 .hint{margin:14px 18px;padding:12px 14px;border-radius:10px;font-size:12px;line-height:1.8;color:#9fb4d8;
   background:rgba(95,232,255,.05);border:1px solid rgba(95,232,255,.16)}
@@ -255,6 +275,18 @@ footer a{color:var(--cyan);text-decoration:none}
       <div class="tracks" id="tracks">
         <div style="text-align:center;color:var(--muted);font-size:12px;padding:22px 0" id="empty">
           列表为空——先导入几首曲子吧
+        </div>
+      </div>
+      <div class="lyrics-panel">
+        <div class="lyrics-head">
+          <span class="t">LYRICS · 歌词</span>
+          <span class="acts">
+            <button id="ly-import">导入 .lrc</button>
+            <button id="ly-clear" style="display:none">清除</button>
+          </span>
+        </div>
+        <div class="lyrics" id="lyrics">
+          <div class="ly-empty">暂无歌词——可导入与曲名同名的 .lrc 文件（放本地或与音频一起拖入）</div>
         </div>
       </div>
       <div class="hint">
@@ -453,6 +485,7 @@ function playIndex(i) {
   audio.src = objectURL;
   setNow(tr);
   renderList();
+  tryAutoLrc(tr.name);
   $("play").textContent = "…";
   if ("mediaSession" in navigator) {
     navigator.mediaSession.metadata = new MediaMetadata({ title: tr.name, artist: "Local · Aurora Sound Deck" });
@@ -503,6 +536,20 @@ function prev() { if (tracks.length) playIndex((cur - 1 + tracks.length) % track
 
 /* ============ 导入 ============ */
 function addFiles(files) {
+  /* 同批拖入的 .lrc 缓存为同名歌词 */
+  Array.prototype.forEach.call(files, function (f) {
+    if (/\.lrc$/i.test(f.name)) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        lrcCache[f.name.replace(/\.lrc$/i, "")] = String(reader.result);
+        if (cur >= 0 && tracks[cur] && tracks[cur].name === f.name.replace(/\.lrc$/i, "")) {
+          tryAutoLrc(tracks[cur].name);
+        }
+        toast("歌词已缓存：" + f.name);
+      };
+      reader.readAsText(f);
+    }
+  });
   var audio_files = Array.prototype.filter.call(files, function (f) {
     return /^audio\//.test(f.type) || /\.(mp3|flac|ogg|wav|m4a|aac|opus)$/i.test(f.name);
   });
@@ -551,6 +598,93 @@ if ("mediaSession" in navigator) {
   navigator.mediaSession.setActionHandler("pause", function () { audio.pause(); });
   navigator.mediaSession.setActionHandler("previoustrack", prev);
   navigator.mediaSession.setActionHandler("nexttrack", next);
+}
+
+/* ============ 歌词 ============ */
+var lrcLines = [];   // {t, text} 按时间升序
+var lycCur = -1;
+var lyricsBox = $("lyrics");
+var lrcInput = document.createElement("input");
+lrcInput.type = "file"; lrcInput.accept = ".lrc,text/plain"; lrcInput.hidden = true;
+document.body.appendChild(lrcInput);
+
+function parseLrc(text) {
+  var out = [];
+  text.split(/\r?\n/).forEach(function (raw) {
+    var times = [];
+    var re = /\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?]/g, m;
+    while ((m = re.exec(raw)) !== null) {
+      times.push(parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + (m[3] ? parseInt(m[3].padEnd(3, "0"), 10) / 1000 : 0));
+    }
+    var line = raw.replace(/\[[^\]]*]/g, "").trim();
+    if (!times.length || !line) return;
+    times.forEach(function (t) { out.push({ t: t, text: line }); });
+  });
+  return out.sort(function (a, b) { return a.t - b.t; });
+}
+
+function renderLyrics() {
+  if (!lrcLines.length) {
+    lyricsBox.innerHTML = '<div class="ly-empty">暂无歌词——可导入与曲名同名的 .lrc 文件（放本地或与音频一起拖入）</div>';
+    $("ly-clear").style.display = "none";
+    return;
+  }
+  lyricsBox.innerHTML = "";
+  lrcLines.forEach(function (line, i) {
+    var div = document.createElement("div");
+    div.className = "ly-line";
+    div.textContent = line.text;
+    div.dataset.idx = i;
+    lyricsBox.appendChild(div);
+  });
+  $("ly-clear").style.display = "";
+  lycCur = -1;
+}
+
+function lyricsTick() {
+  if (!lrcLines.length || cur < 0 || audio.paused) return;
+  var t = audio.currentTime;
+  var idx = -1;
+  for (var i = 0; i < lrcLines.length; i++) { if (lrcLines[i].t <= t) idx = i; else break; }
+  if (idx === lycCur) return;
+  lycCur = idx;
+  var nodes = lyricsBox.querySelectorAll(".ly-line");
+  nodes.forEach(function (n, i) { n.classList.toggle("active", i === idx); });
+  var active = lyricsBox.querySelector(".ly-line.active");
+  if (active) {
+    var box = lyricsBox.getBoundingClientRect();
+    var a = active.getBoundingClientRect();
+    if (a.top < box.top + 30 || a.bottom > box.bottom - 30) {
+      lyricsBox.scrollTop = active.offsetTop - lyricsBox.clientHeight / 2 + active.offsetHeight / 2;
+    }
+  }
+}
+setInterval(lyricsTick, 250);
+
+function loadLrcText(text) {
+  lrcLines = parseLrc(text);
+  renderLyrics();
+  toast(lrcLines.length ? "歌词已加载（" + lrcLines.length + " 行）" : "这个 .lrc 里没有可解析的歌词行");
+}
+
+$("ly-import").addEventListener("click", function () { lrcInput.click(); });
+lrcInput.addEventListener("change", function () {
+  if (lrcInput.files[0]) {
+    var reader = new FileReader();
+    reader.onload = function () { loadLrcText(String(reader.result)); };
+    reader.readAsText(lrcInput.files[0]);
+  }
+  lrcInput.value = "";
+});
+$("ly-clear").addEventListener("click", function () { lrcLines = []; renderLyrics(); });
+
+/* 曲名变化时尝试加载同目录同名 .lrc（仅手动导入流程：用户拖入
+   音频+同名 .lrc 一起进来时，addFiles 顺带缓存歌词文本） */
+var lrcCache = {};   // baseName -> text
+function tryAutoLrc(trackName) {
+  if (lrcCache[trackName]) { loadLrcText(lrcCache[trackName]); return; }
+  lrcLines = [];
+  renderLyrics();
 }
 
 /* ============ 控件 ============ */

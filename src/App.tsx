@@ -4277,11 +4277,20 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
         urlRef.current = URL.createObjectURL(blob);
         const audio = audioRef.current;
         if (!audio) return;
-        audio.src = urlRef.current;
-        audio.play().catch(() => onNotice("浏览器阻止了自动播放，请再按一次播放"));
         setCur(index);
         setTitle(tr.name);
-        setPlaying(true);
+        // 换 src 后等 canplay 再 play：立即 play 会因 readyState=0 被
+        // 静默 stall（自动播放下一首失效的根因）。
+        audio.src = urlRef.current;
+        const onCanPlay = () => {
+          audio.removeEventListener("canplay", onCanPlay);
+          audio.play().catch(() => {
+            setPlaying(false);
+            onNotice(`已就绪：${tr.name}，点播放继续`);
+          });
+        };
+        audio.addEventListener("canplay", onCanPlay, { once: true });
+        audio.load();
       } catch (error) {
         onNotice(String(error));
       } finally {
@@ -4384,7 +4393,13 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
       setPlaying(true);
     };
     const onPause = () => setPlaying(false);
-    const onEnded = () => step(1);
+    const onEnded = () => {
+      step(1);
+      // 自动切曲 play 被 stall 时兜底重播当前曲。
+      setTimeout(() => {
+        if (audio.paused && !audio.ended) audio.play().catch(() => {});
+      }, 500);
+    };
     const onTime = () => {
       if (isFinite(audio.duration)) {
         setPos({ cur: audio.currentTime, end: audio.duration });

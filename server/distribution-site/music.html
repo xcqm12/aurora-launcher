@@ -451,11 +451,30 @@ function playIndex(i) {
   if (objectURL) URL.revokeObjectURL(objectURL);
   objectURL = URL.createObjectURL(tr.blob);
   audio.src = objectURL;
-  audio.play().catch(function () { toast("浏览器阻止了自动播放，请再按一次播放"); });
   setNow(tr);
-  $("disc").classList.add("spinning");
-  $("play").textContent = "⏸";
   renderList();
+  $("play").textContent = "…";
+  if ("mediaSession" in navigator) {
+    navigator.mediaSession.metadata = new MediaMetadata({ title: tr.name, artist: "Local · Aurora Sound Deck" });
+  }
+  // 关键：换 src 后必须等 canplay（资源已可解码）再 play。
+  // 立即 play 会因 readyState=0 被 Chrome 静默 stall，导致
+  // 「自动播放下一首失效、停在原地」。
+  var onCanPlay = function () {
+    audio.removeEventListener("canplay", onCanPlay);
+    audio.play().then(function () {
+      $("disc").classList.add("spinning");
+      $("play").textContent = "⏸";
+    }).catch(function () {
+      // 自动切曲没有用户手势时 play() 可能被策略拒绝：
+      // 降级为「待命待点击」，不假装在播。
+      $("play").textContent = "▶";
+      $("disc").classList.remove("spinning");
+      toast("已就绪：" + tr.name + "，点播放继续");
+    });
+  };
+  audio.addEventListener("canplay", onCanPlay, { once: true });
+  audio.load();
 }
 
 function toggle() {
@@ -525,6 +544,15 @@ $("drop").addEventListener("drop", function (e) { addFiles(e.dataTransfer.files)
   });
 });
 
+/* MediaSession：系统媒体键/锁屏控制，同时增强自动播放手势信用 */
+if ("mediaSession" in navigator) {
+  navigator.mediaSession.metadata = new MediaMetadata({ title: "Aurora Sound Deck", artist: "Local" });
+  navigator.mediaSession.setActionHandler("play", function () { audio.play(); });
+  navigator.mediaSession.setActionHandler("pause", function () { audio.pause(); });
+  navigator.mediaSession.setActionHandler("previoustrack", prev);
+  navigator.mediaSession.setActionHandler("nexttrack", next);
+}
+
 /* ============ 控件 ============ */
 $("play").addEventListener("click", toggle);
 $("next").addEventListener("click", next);
@@ -553,7 +581,16 @@ audio.addEventListener("loadedmetadata", function () {
     renderList();
   }
 });
-audio.addEventListener("ended", next);
+audio.addEventListener("ended", function () {
+  next();
+  // 兜底：自动切曲被策略拦下时，重播当前曲（同源 Blob 无跨域问题，
+  // ended 本身来自上一次合法播放，多数浏览器允许在此恢复）。
+  setTimeout(function () {
+    if (audio.paused && cur >= 0 && tracks.length) {
+      audio.play().catch(function () {});
+    }
+  }, 500);
+});
 document.addEventListener("keydown", function (e) {
   if (e.target.tagName === "INPUT" && e.target.type === "file") return;
   if (e.code === "Space") { e.preventDefault(); toggle(); }

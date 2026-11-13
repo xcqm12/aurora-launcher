@@ -150,6 +150,30 @@ details a{color:var(--accent2)}
   border:1px solid rgba(126,167,255,.25);border-radius:12px;padding:18px 20px;font-size:13.2px;color:#b9c5dd;line-height:1.9}
 .note b{color:#fff}
 
+/* ===== 悬浮音乐舱按钮 ===== */
+#music-fab{position:fixed;right:26px;bottom:26px;z-index:55;display:flex;align-items:center;gap:0;
+  height:52px;border-radius:99px;text-decoration:none;overflow:hidden;
+  background:linear-gradient(135deg,rgba(95,232,255,.16),rgba(143,124,255,.16));
+  border:1px solid rgba(95,232,255,.45);backdrop-filter:blur(10px);
+  box-shadow:0 6px 26px rgba(0,0,0,.4),0 0 22px rgba(95,232,255,.14);
+  transition:width .3s cubic-bezier(.2,.7,.2,1),box-shadow .25s,border-color .25s}
+#music-fab:hover{border-color:var(--cyan);box-shadow:0 8px 34px rgba(0,0,0,.5),0 0 34px rgba(95,232,255,.3)}
+#music-fab .fab-note{width:52px;height:52px;display:grid;place-items:center;flex-shrink:0;position:relative}
+#music-fab .fab-note svg{width:22px;height:22px;fill:var(--cyan);filter:drop-shadow(0 0 8px rgba(95,232,255,.6))}
+#music-fab .fab-note::after{content:"";position:absolute;inset:8px;border-radius:50%;
+  border:1.5px solid rgba(95,232,255,.5);animation:fabPulse 2.4s ease-out infinite}
+@keyframes fabPulse{0%{transform:scale(.7);opacity:.9}100%{transform:scale(1.5);opacity:0}}
+#music-fab .fab-label{max-width:0;opacity:0;white-space:nowrap;overflow:hidden;
+  color:var(--cyan);font-size:13px;font-weight:700;letter-spacing:.06em;
+  transition:max-width .3s cubic-bezier(.2,.7,.2,1),opacity .25s,padding .3s}
+#music-fab:hover .fab-label{max-width:130px;opacity:1;padding-right:18px}
+/* 滚动离开 hero 才出现 */
+#music-fab{opacity:0;transform:translateY(18px);pointer-events:none;
+  transition:opacity .4s,transform .4s,width .3s,box-shadow .25s,border-color .25s}
+#music-fab.show{opacity:1;transform:none;pointer-events:auto}
+@media (max-width:640px){#music-fab{right:14px;bottom:14px;height:46px}
+  #music-fab .fab-note{width:46px;height:46px}}
+
 footer{margin-top:56px;text-align:center;color:var(--muted);font-size:12px;line-height:2.1;
   border-top:1px solid var(--line);padding-top:26px}
 footer a{color:var(--accent2);text-decoration:none}
@@ -579,9 +603,16 @@ nav a.link.cur::after{width:100%}
     </div>
   </section>
 
+  <a id="music-fab" href="music.html" aria-label="进入音乐舱" title="Aurora 音乐舱">
+    <span class="fab-note" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
+    </span>
+    <span class="fab-label">音乐舱 SOUND DECK</span>
+  </a>
+
   <footer>
     开源仓库：<a href="https://github.com/xcqm12/aurora-launcher">github.com/xcqm12/aurora-launcher</a> ·
-    MIT License<br>
+    MIT License · <a href="music.html">♪ 音乐舱</a><br>
     游戏文件从 Mojang / BMCLAPI / Modrinth / CurseForge / optifine.net 等官方源下载，本站不分发游戏本体<br>
     本页由 Aurora Launcher 发布流程部署
   </footer>
@@ -603,6 +634,20 @@ nav a.link.cur::after{width:100%}
   }
   window.addEventListener("scroll", onScroll, { passive: true });
   onScroll();
+
+  /* ---------- 音乐舱悬浮按钮：滚过 hero 后出现 ---------- */
+  var fab = document.getElementById("music-fab");
+  if (fab) {
+    var fabTick = false;
+    var fabUpdate = function () {
+      fab.classList.toggle("show", window.scrollY > 320);
+      fabTick = false;
+    };
+    window.addEventListener("scroll", function () {
+      if (!fabTick) { fabTick = true; requestAnimationFrame(fabUpdate); }
+    }, { passive: true });
+    fabUpdate();
+  }
 
   /* ---------- 入场动画 ---------- */
   var items = document.querySelectorAll(".reveal");

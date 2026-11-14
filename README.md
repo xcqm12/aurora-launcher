@@ -2,7 +2,13 @@
 
 Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游戏启动与加载器自动安装、微软正版/LittleSkin/离线登录、整合包导入导出、实例内容管理、镜像加速、EasyTier 联机。历史版本更新记录见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
-## 0.6.8 更新内容
+## 0.6.9 更新内容
+
+- **修复音乐舱曲名乱码**：导入时曲目文件名被按 mod 包的 ASCII 白名单清洗，中文等非 ASCII 字符全部被碾成下划线。现曲目文件名保留 Unicode，仅替换路径/Windows 非法字符与控制字符（含结尾点、保留设备名与超长截断）。
+- **修复打包版音乐舱无法播放**：打包版 CSP 缺 `media-src`，播放用的 `blob:` 音频被 CSP 拦截且无错误提示（点播放无声、界面停在待命）。现 CSP 增加 `media-src 'self' blob: data:`，音频 Blob 带 MIME，解码失败给出明确提示。
+- 已导入的旧曲目文件名无法还原，升级后请删除旧曲目重新导入一次。
+
+## 0.6.8 更新内容（历史）
 
 - **音乐舱**：侧边栏新增「音乐舱」，导入自己喜欢的本地音乐（mp3 / flac / ogg / wav / m4a 等，多选或逐首），文件复制到数据目录 `music/` 持久保存（上限 2000 首、单首 200 MB）；Web Audio 实时频谱可视化、迷你电平条、转盘随播放旋转；播放/暂停/上下曲/进度/音量齐全。音乐仅在本机播放，不上传。
 - **修复播放器切曲失效**：换曲后立即播放会被浏览器静默挂起（自动播放下一首失效）。现等待资源就绪（`canplay`）后再播放；被自动播放策略拒绝时降级为真实的「已就绪，点播放继续」待命状态。
@@ -222,7 +228,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.6.7>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.6.9>
 - 分发下载页：<http://mcdles.us.ci/>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）

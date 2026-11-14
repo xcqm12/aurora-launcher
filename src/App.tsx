@@ -4236,6 +4236,17 @@ function SettingsPage({
   );
 }
 
+/* 扩展名 → MIME；WebView2 对无类型的 Blob 嗅探不可靠，带上更稳 */
+const AUDIO_MIME: Record<string, string> = {
+  mp3: "audio/mpeg",
+  flac: "audio/flac",
+  ogg: "audio/ogg",
+  opus: "audio/ogg",
+  wav: "audio/wav",
+  m4a: "audio/mp4",
+  aac: "audio/aac",
+};
+
 function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
   const [tracks, setTracks] = useState<MusicTrack[]>([]);
   const [cur, setCur] = useState(-1);
@@ -4272,7 +4283,8 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
           offset = chunk.offset;
           if (offset >= chunk.total) break;
         }
-        const blob = new Blob(parts as BlobPart[]);
+        const ext = tr.file.slice(tr.file.lastIndexOf(".") + 1).toLowerCase();
+        const blob = new Blob(parts as BlobPart[], { type: AUDIO_MIME[ext] ?? "audio/mpeg" });
         if (urlRef.current) URL.revokeObjectURL(urlRef.current);
         urlRef.current = URL.createObjectURL(blob);
         const audio = audioRef.current;
@@ -4283,13 +4295,19 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
         // 静默 stall（自动播放下一首失效的根因）。
         audio.src = urlRef.current;
         const onCanPlay = () => {
-          audio.removeEventListener("canplay", onCanPlay);
+          audio.removeEventListener("error", onError);
           audio.play().catch(() => {
             setPlaying(false);
             onNotice(`已就绪：${tr.name}，点播放继续`);
           });
         };
+        // 解码失败（坏文件/不支持编码）不能无声卡死，给出提示。
+        const onError = () => {
+          audio.removeEventListener("canplay", onCanPlay);
+          onNotice(`无法解码音频文件：${tr.name}`);
+        };
         audio.addEventListener("canplay", onCanPlay, { once: true });
+        audio.addEventListener("error", onError, { once: true });
         audio.load();
       } catch (error) {
         onNotice(String(error));

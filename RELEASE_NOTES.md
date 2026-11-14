@@ -1,4 +1,13 @@
-# Aurora Launcher v0.6.9
+# Aurora Launcher v0.7.0
+
+- **Rust 原生启动管线提速**：资源索引先行取回后，client jar、libraries 与数千个资源对象合成一个大批次并行下载（消除旧两阶段串行等待）；并发提升（官方 8→16、BMCLAPI 2→6）；每个下载候选 URL 3 次退避重试（4xx 立即换源）；流式写盘 + 边写边 SHA-1 校验（client jar 不再整块驻留内存，`.part` 原子改名无半成品落盘）；Java 探测并发化并加 5 分钟缓存（多 JDK 机器每次启动省 1–3 秒）；natives 缓存标记记录 client jar SHA-1，修复重装换 jar 后自动重解压；版本清单走镜像候选 + 重试。游戏本体仍由 Java（JVM）运行。
+- **JVM 优化预设（设置 → 启动与性能）**：G1GC（HMCL 社区验证参数，含 fml 证书修复 flags，自动加 `-XX:+UnlockExperimentalVMOptions`）/ ZGC（JDK 15+，21+ 自动 ZGenerational，老 JVM 自动回退 G1）/ 不注入；注入前自动移除版本 JSON 自带的冲突收集器 flags，防 JVM 拒绝启动。支持「额外 JVM 参数」「额外游戏参数」自定义。
+- **默认窗口尺寸与全屏设置**：新增全局窗口宽/高与全屏开关，替换旧硬编码 854×480。
+- **兼容模式**：设置 → 启动管线可切换「兼容」，完全沿用 0.6.9 及之前的下载与参数逻辑（串行两阶段、单次尝试、无 JVM 优化），新管线出问题时可一键回退对比。
+- **修复自定义镜像设置失效**：保存设置时 `custom:<base>` 下载源被静默重置为官方，自定义镜像保存后即失效；现按白名单（official/bmclapi/auto/custom:）完整保留。
+- 实测：vanilla 1.20.1 双模式真实启动冒烟通过（native 含 G1 预设 JVM 正常创建，compat 行为与旧版一致）。
+
+# Aurora Launcher v0.6.9（历史）
 
 - **修复音乐舱曲名乱码**：导入时曲目文件名被按 mod 包的 ASCII 白名单清洗，中文等非 ASCII 字符全部被碾成下划线（如 `光辉岁月-Beyond.flac` → `______-Beyond.flac`）。现曲目文件名保留 Unicode，仅替换路径/Windows 非法字符与控制字符，并处理结尾点、Windows 保留设备名（CON/NUL/COM1…）与超长截断。
 - **修复打包版音乐舱无法播放**：打包版 CSP 只有 `default-src 'self'` 而没有 `media-src`，播放用的 `blob:` 音频 URL 被 CSP 拦截，等待就绪（`canplay`）的播放逻辑永远等不到、也没有错误提示——表现为点了曲目或播放键后无声、界面停在待命（开发模式页面不经这层 CSP，因此此前未暴露）。现 CSP 增加 `media-src 'self' blob: data:`，音频 Blob 按扩展名携带 MIME，解码失败给出明确提示而非无声卡死。

@@ -3381,6 +3381,14 @@ function SettingsPage({
   const [instancesDir, setInstancesDir] = useState(settings.instances_dir || "");
   const [dataDir, setDataDir] = useState(settings.data_dir || "");
   const [sakuraSource, setSakuraSource] = useState(settings.sakura_source || "");
+  const [launchPipeline, setLaunchPipeline] = useState(settings.launch_pipeline || "native");
+  const [jvmOptimize, setJvmOptimize] = useState(settings.jvm_optimize !== false);
+  const [jvmGc, setJvmGc] = useState(settings.jvm_gc || "g1");
+  const [extraJvmArgs, setExtraJvmArgs] = useState(settings.extra_jvm_args || "");
+  const [extraGameArgs, setExtraGameArgs] = useState(settings.extra_game_args || "");
+  const [windowWidth, setWindowWidth] = useState(String(settings.window_width || 854));
+  const [windowHeight, setWindowHeight] = useState(String(settings.window_height || 480));
+  const [windowFullscreen, setWindowFullscreen] = useState(settings.window_fullscreen || false);
   const [accounts, setAccounts] = useState<AccountView[]>([]);
   const [offlineName, setOfflineName] = useState("");
   const [deviceCode, setDeviceCode] = useState<DeviceCode | null>(null);
@@ -3418,6 +3426,14 @@ function SettingsPage({
     setInstancesDir(settings.instances_dir || "");
     setDataDir(settings.data_dir || "");
     setSakuraSource(settings.sakura_source || "");
+    setLaunchPipeline(settings.launch_pipeline || "native");
+    setJvmOptimize(settings.jvm_optimize !== false);
+    setJvmGc(settings.jvm_gc || "g1");
+    setExtraJvmArgs(settings.extra_jvm_args || "");
+    setExtraGameArgs(settings.extra_game_args || "");
+    setWindowWidth(String(settings.window_width || 854));
+    setWindowHeight(String(settings.window_height || 480));
+    setWindowFullscreen(settings.window_fullscreen || false);
     setMsClientId(settings.ms_client_id);
   }, [settings]);
 
@@ -3487,6 +3503,21 @@ function SettingsPage({
   const chooseSharedDir = async () => {
     const path = await api.pickFolder();
     if (path) setSharedGameDir(path);
+  };
+
+  const saveLaunch = async () => {
+    await onSave({
+      ...settings,
+      launch_pipeline: launchPipeline,
+      jvm_optimize: jvmOptimize,
+      jvm_gc: jvmGc,
+      extra_jvm_args: extraJvmArgs.trim(),
+      extra_game_args: extraGameArgs.trim(),
+      window_width: Math.min(7680, Math.max(100, Number(windowWidth) || 854)),
+      window_height: Math.min(4320, Math.max(100, Number(windowHeight) || 480)),
+      window_fullscreen: windowFullscreen,
+    });
+    onNotice("启动与性能设置已保存");
   };
 
   const saveMsClient = async () => {
@@ -4167,6 +4198,102 @@ function SettingsPage({
         <p className="security-note">
           共享目录用于已存在的官方游戏文件，避免重复下载数 GB 的 assets；实例的 mods、saves、config、logs 仍完全隔离。不填则每个实例独立下载。
         </p>
+      </section>
+
+      <section className="settings-card">
+        <div className="settings-heading">
+          <div className="setting-icon network">
+            <Settings2 size={22} />
+          </div>
+          <div>
+            <h3>启动与性能</h3>
+            <p>
+              原生管线：Rust 并行下载（流式 SHA-1 校验、断点重试）+ JVM 调优，游戏本体仍由 Java 运行；兼容模式完全沿用旧版启动逻辑，便于出问题时回退对比。
+            </p>
+          </div>
+        </div>
+        <label className="field-label">
+          启动管线
+          <select
+            value={launchPipeline}
+            onChange={(event) => setLaunchPipeline(event.target.value)}
+          >
+            <option value="native">原生（推荐：并行下载 + 重试 + JVM 优化）</option>
+            <option value="compat">兼容（旧版管线，逐项排查问题时使用）</option>
+          </select>
+        </label>
+        {launchPipeline === "native" && (
+          <>
+            <div className="toggle-row">
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={jvmOptimize}
+                  onChange={(event) => setJvmOptimize(event.target.checked)}
+                />
+                <span>启用 JVM 优化预设（游戏加载与卡顿的大头）</span>
+              </label>
+            </div>
+            <label className="field-label">
+              GC 预设
+              <select
+                value={jvmGc}
+                onChange={(event) => setJvmGc(event.target.value)}
+                disabled={!jvmOptimize}
+              >
+                <option value="g1">G1GC（推荐，含 fml 证书修复）</option>
+                <option value="zgc">ZGC（JDK 15+，低延迟）</option>
+                <option value="off">不注入（仅用版本自带参数）</option>
+              </select>
+            </label>
+            <label className="field-label">
+              额外 JVM 参数（空白分隔，如 -XX:+UseStringDeduplication）
+              <input
+                value={extraJvmArgs}
+                onChange={(event) => setExtraJvmArgs(event.target.value)}
+                spellCheck={false}
+              />
+            </label>
+            <label className="field-label">
+              额外游戏参数（空白分隔，如 --server）
+              <input
+                value={extraGameArgs}
+                onChange={(event) => setExtraGameArgs(event.target.value)}
+                spellCheck={false}
+              />
+            </label>
+            <label className="field-label">
+              默认窗口尺寸与全屏（启动时以实例显示，可被版本参数覆盖）
+              <div className="inline-field">
+                <input
+                  type="number"
+                  min={100}
+                  max={7680}
+                  value={windowWidth}
+                  onChange={(event) => setWindowWidth(event.target.value)}
+                />
+                <input
+                  type="number"
+                  min={100}
+                  max={4320}
+                  value={windowHeight}
+                  onChange={(event) => setWindowHeight(event.target.value)}
+                />
+                <button
+                  className={`ghost-button ${windowFullscreen ? "active" : ""}`}
+                  onClick={() => setWindowFullscreen(!windowFullscreen)}
+                >
+                  {windowFullscreen ? "全屏：开" : "全屏：关"}
+                </button>
+              </div>
+            </label>
+          </>
+        )}
+        <div className="settings-actions">
+          <button className="primary-button" onClick={() => void saveLaunch()}>
+            <Check size={17} /> 保存启动设置
+          </button>
+        </div>
       </section>
 
       <AiCard settings={settings} onNotice={onNotice} />

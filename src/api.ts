@@ -105,6 +105,14 @@ export type AppSettings = {
   instances_dir?: string;
   data_dir?: string;
   sakura_source?: string;
+  launch_pipeline?: string;
+  jvm_optimize?: boolean;
+  jvm_gc?: string;
+  extra_jvm_args?: string;
+  extra_game_args?: string;
+  window_width?: number;
+  window_height?: number;
+  window_fullscreen?: boolean;
 };
 export type ProxyTest = { ok: boolean; status: number; latency_ms: number; message: string };
 export type SakuraBackground = { data_url: string; cached: boolean };

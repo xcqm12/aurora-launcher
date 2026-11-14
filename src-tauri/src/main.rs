@@ -14,7 +14,36 @@ fn main() {
             .get(position + 4)
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(20);
-        match aurora_launcher_lib::smoke_launch(&shared, &version, &java, "AuroraTest", seconds) {
+        // 可选开关：--pipeline native|compat、--jvm-opt on|off（默认 native/off，
+        // 与既有冒烟行为一致）。
+        let mut pipeline = "native";
+        let mut jvm_opt = false;
+        let tail: &[String] = args.get(position + 5..).unwrap_or(&[]);
+        let mut index = 0;
+        while index < tail.len() {
+            match tail[index].as_str() {
+                "--pipeline" => {
+                    if let Some(value) = tail.get(index + 1) {
+                        pipeline = value.as_str();
+                    }
+                    index += 2;
+                }
+                "--jvm-opt" => {
+                    jvm_opt = tail.get(index + 1).map(|value| value.as_str()) == Some("on");
+                    index += 2;
+                }
+                _ => index += 1,
+            }
+        }
+        match aurora_launcher_lib::smoke_launch(
+            &shared,
+            &version,
+            &java,
+            "AuroraTest",
+            seconds,
+            pipeline,
+            jvm_opt,
+        ) {
             Ok(log) => println!("{log}"),
             Err(error) => {
                 eprintln!("launch smoke failed: {error}");

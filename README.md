@@ -2,7 +2,14 @@
 
 Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游戏启动与加载器自动安装、微软正版/LittleSkin/离线登录、整合包导入导出、实例内容管理、镜像加速、EasyTier 联机。历史版本更新记录见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
-## 0.6.9 更新内容
+## 0.7.0 更新内容
+
+- **Rust 原生启动管线提速**：下载批次合一并行（索引先行，libraries 与数千资源不再串行等待）、并发提升（16/6）、每 URL 3 次退避重试、流式 SHA-1 校验 + 原子写、Java 探测缓存、natives 标记记录 client jar SHA-1；版本清单走镜像候选 + 重试。游戏本体仍由 Java 运行。
+- **JVM 优化预设**：G1GC（含 fml 证书修复）/ ZGC（JDK 15+）/ 不注入，可加「额外 JVM/游戏参数」；默认窗口尺寸与全屏设置。
+- **兼容模式**：设置里一键切回 0.6.9 旧启动逻辑，出问题回退对比。
+- **修复自定义镜像设置保存即失效**（`custom:<base>` 被重置为官方）。
+
+## 0.6.9 更新内容（历史）
 
 - **修复音乐舱曲名乱码**：导入时曲目文件名被按 mod 包的 ASCII 白名单清洗，中文等非 ASCII 字符全部被碾成下划线。现曲目文件名保留 Unicode，仅替换路径/Windows 非法字符与控制字符（含结尾点、保留设备名与超长截断）。
 - **修复打包版音乐舱无法播放**：打包版 CSP 缺 `media-src`，播放用的 `blob:` 音频被 CSP 拦截且无错误提示（点播放无声、界面停在待命）。现 CSP 增加 `media-src 'self' blob: data:`，音频 Blob 带 MIME，解码失败给出明确提示。
@@ -228,7 +235,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.6.9>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.7.0>
 - 分发下载页：<http://mcdles.us.ci/>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）

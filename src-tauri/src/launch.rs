@@ -36,6 +36,33 @@ pub struct LaunchContext {
     pub ai_args: Vec<String>,
     pub download_source: String,
     pub proxy: String,
+    /// 启动管线：native（默认，Rust 原生快速管线）| compat（兼容模式，
+    /// 完全沿用 0.6.9 及之前的下载/参数行为，供出问题时回退对比）。
+    pub pipeline: String,
+    /// JVM 优化预设与额外参数（仅 native 生效）。
+    pub jvm_optimize: bool,
+    pub jvm_gc: String,
+    pub extra_jvm_args: String,
+    pub extra_game_args: String,
+    /// 默认窗口尺寸与全屏（替换旧硬编码 854×480）。
+    pub window_width: u32,
+    pub window_height: u32,
+    pub fullscreen: bool,
+}
+
+/// 启动管线模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Pipeline {
+    Native,
+    Compat,
+}
+
+pub(crate) fn pipeline_of(value: &str) -> Pipeline {
+    if value.trim() == "compat" {
+        Pipeline::Compat
+    } else {
+        Pipeline::Native
+    }
 }
 
 #[derive(Debug)]
@@ -615,11 +642,105 @@ fn pick_download_source(
     }
 }
 
+/// 单候选 URL 的流式下载结果：Terminal 表示该 URL 不值得重试（4xx），
+/// Retryable 表示网络/校验类瞬时错误。
+enum DownloadFail {
+    Terminal(String),
+    Retryable(String),
+}
+
+impl From<std::io::Error> for DownloadFail {
+    fn from(error: std::io::Error) -> Self {
+        DownloadFail::Retryable(error.to_string())
+    }
+}
+
+/// 原生管线单 URL 下载：流式写 `.aurora.part` + 边写边算 SHA-1，
+/// 4xx 终止、5xx/网络/校验错误重试（3 次，线性退避）。
+/// 与 write_atomic 同名约定，rename 前文件不可见，无半成品落盘。
+async fn download_streaming(
+    client: &reqwest::Client,
+    url: &str,
+    item: &DownloadItem,
+) -> Result<(), String> {
+    let mut last_error = String::new();
+    for attempt in 1..=3 {
+        if attempt > 1 {
+            tokio::time::sleep(std::time::Duration::from_millis(600 * attempt as u64)).await;
+        }
+        match try_download_stream(client, url, item).await {
+            Ok(()) => return Ok(()),
+            Err(DownloadFail::Terminal(message)) => return Err(message),
+            Err(DownloadFail::Retryable(message)) => last_error = message,
+        }
+    }
+    Err(last_error)
+}
+
+async fn try_download_stream(
+    client: &reqwest::Client,
+    url: &str,
+    item: &DownloadItem,
+) -> Result<(), DownloadFail> {
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| DownloadFail::Retryable(error.to_string()))?;
+    let status = response.status();
+    if !status.is_success() {
+        let message = format!("HTTP {}", status.as_u16());
+        return Err(if (400..500).contains(&status.as_u16()) {
+            DownloadFail::Terminal(message)
+        } else {
+            DownloadFail::Retryable(message)
+        });
+    }
+    let part_path = item.path.with_extension("aurora.part");
+    if let Some(parent) = item.path.parent() {
+        fs::create_dir_all(parent).map_err(DownloadFail::from)?;
+    }
+    let mut file = File::create(&part_path).map_err(|error| {
+        DownloadFail::Retryable(format!("写入失败：{error}"))
+    })?;
+    let mut hasher = Sha1::new();
+    let mut downloaded: u64 = 0;
+    let mut response = response;
+    loop {
+        let chunk = response
+            .chunk()
+            .await
+            .map_err(|error| DownloadFail::Retryable(error.to_string()))?;
+        let Some(chunk) = chunk else { break };
+        hasher.update(&chunk);
+        downloaded += chunk.len() as u64;
+        file.write_all(&chunk).map_err(|error| {
+            DownloadFail::Retryable(format!("写入失败：{error}"))
+        })?;
+    }
+    drop(file);
+    if item.size > 0 && downloaded != item.size {
+        let _ = fs::remove_file(&part_path);
+        return Err(DownloadFail::Retryable("文件大小校验失败".into()));
+    }
+    if let Some(expected) = &item.sha1 {
+        let actual = hex::encode(hasher.finalize());
+        if actual != expected.to_lowercase() {
+            let _ = fs::remove_file(&part_path);
+            return Err(DownloadFail::Retryable("SHA-1 校验失败".into()));
+        }
+    }
+    fs::rename(&part_path, &item.path)
+        .map_err(|error| DownloadFail::Terminal(format!("写入失败：{error}")))?;
+    Ok(())
+}
+
 async fn download_one(
     client: &reqwest::Client,
     item: &DownloadItem,
     source: &str,
     version_id: &str,
+    pipeline: Pipeline,
 ) -> Result<bool, String> {
     if item.path.exists() {
         if item.size > 0 {
@@ -632,40 +753,56 @@ async fn download_one(
             return Ok(false);
         }
     }
+    let urls = candidates(&item.url, source, version_id);
     let mut last_error = String::new();
-    for url in candidates(&item.url, source, version_id) {
-        match client.get(&url).send().await {
-            Ok(response) => {
-                if !response.status().is_success() {
-                    last_error = format!("HTTP {}", response.status().as_u16());
-                    continue;
+    match pipeline {
+        // 原生管线：每候选 URL 独立重试 + 流式校验；候选仍按顺序兜底
+        //（镜像 404 立即切官方，不浪费时间重试坏 URL）。
+        Pipeline::Native => {
+            for url in urls {
+                match download_streaming(client, &url, item).await {
+                    Ok(()) => return Ok(true),
+                    Err(error) => last_error = error,
                 }
-                let bytes = match response.bytes().await {
-                    Ok(bytes) => bytes,
+            }
+        }
+        // 兼容管线：0.6.9 及之前的旧逻辑——整块缓冲、每候选一次尝试。
+        Pipeline::Compat => {
+            for url in urls {
+                match client.get(&url).send().await {
+                    Ok(response) => {
+                        if !response.status().is_success() {
+                            last_error = format!("HTTP {}", response.status().as_u16());
+                            continue;
+                        }
+                        let bytes = match response.bytes().await {
+                            Ok(bytes) => bytes,
+                            Err(error) => {
+                                last_error = error.to_string();
+                                continue;
+                            }
+                        };
+                        if item.size > 0 && bytes.len() as u64 != item.size {
+                            last_error = "文件大小校验失败".into();
+                            continue;
+                        }
+                        if let Some(expected) = &item.sha1 {
+                            let actual = hex::encode(Sha1::digest(&bytes));
+                            if actual != expected.to_lowercase() {
+                                last_error = "SHA-1 校验失败".into();
+                                continue;
+                            }
+                        }
+                        if let Some(parent) = item.path.parent() {
+                            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                        }
+                        write_atomic(&item.path, &bytes)?;
+                        return Ok(true);
+                    }
                     Err(error) => {
                         last_error = error.to_string();
-                        continue;
-                    }
-                };
-                if item.size > 0 && bytes.len() as u64 != item.size {
-                    last_error = "文件大小校验失败".into();
-                    continue;
-                }
-                if let Some(expected) = &item.sha1 {
-                    let actual = hex::encode(Sha1::digest(&bytes));
-                    if actual != expected.to_lowercase() {
-                        last_error = "SHA-1 校验失败".into();
-                        continue;
                     }
                 }
-                if let Some(parent) = item.path.parent() {
-                    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-                }
-                write_atomic(&item.path, &bytes)?;
-                return Ok(true);
-            }
-            Err(error) => {
-                last_error = error.to_string();
             }
         }
     }
@@ -681,13 +818,31 @@ async fn download_all(
     items: Vec<DownloadItem>,
     source: &str,
     version_id: &str,
+    pipeline: Pipeline,
     report: &(dyn Fn(&str) + Send + Sync),
 ) -> Result<(), String> {
     let total = items.len();
     if total == 0 {
         return Ok(());
     }
-    let concurrency = if source == "bmclapi" { 2 } else { 8 };
+    // 原生管线并发翻倍/提三倍（官方源文件小、数量多，瓶颈在请求数）；
+    // 兼容管线保持旧值。bmclapi 有节点限流，适度提升。
+    let concurrency = match pipeline {
+        Pipeline::Native => {
+            if source == "bmclapi" {
+                6
+            } else {
+                16
+            }
+        }
+        Pipeline::Compat => {
+            if source == "bmclapi" {
+                2
+            } else {
+                8
+            }
+        }
+    };
     let done = Arc::new(AtomicUsize::new(0));
     report(&format!("需要检查/下载 {total} 个文件"));
     let results = stream::iter(items.into_iter().map(|item| {
@@ -696,7 +851,7 @@ async fn download_all(
         let source = source.to_string();
         let version_id = version_id.to_string();
         async move {
-            let result = download_one(&client, &item, &source, &version_id).await;
+            let result = download_one(&client, &item, &source, &version_id, pipeline).await;
             let current = done.fetch_add(1, Ordering::Relaxed) + 1;
             if current % 25 == 0 || current == total {
                 report(&format!("下载进度 {current}/{total}"));
@@ -814,12 +969,84 @@ fn collect_java_candidates(preferred: Option<&str>) -> Vec<PathBuf> {
     candidates
 }
 
+/// 候选 Java 探测缓存（5 分钟 TTL）：旧实现每次启动都串行 spawn 每个
+/// 候选的 `java -version`，多 JDK 机器上白白花 1–3 秒；现并发探测且
+/// 进程内缓存，命中后零开销。
+fn probe_java_map(candidates: &[PathBuf]) -> HashMap<PathBuf, Option<u32>> {
+    static CACHE: std::sync::OnceLock<
+        Mutex<Option<(std::time::Instant, HashMap<PathBuf, Option<u32>>)>>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let mut missing: Vec<PathBuf> = Vec::new();
+    {
+        let guard = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((at, map)) = guard.as_ref() {
+            if at.elapsed() < std::time::Duration::from_secs(300) {
+                for candidate in candidates {
+                    if !map.contains_key(candidate) {
+                        missing.push(candidate.clone());
+                    }
+                }
+            } else {
+                missing.extend(candidates.iter().cloned());
+            }
+        } else {
+            missing.extend(candidates.iter().cloned());
+        }
+    }
+    if !missing.is_empty() {
+        // 候选数量有限（个位数到十几），scoped 线程并发 spawn 探测。
+        let results: Vec<(PathBuf, Option<u32>)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = missing
+                .iter()
+                .map(|path| {
+                    let path = path.clone();
+                    scope.spawn(move || (path.clone(), java_major(&path)))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|handle| handle.join().ok())
+                .collect()
+        });
+        let mut guard = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let expired = match guard.as_ref() {
+            Some((at, _)) => at.elapsed() >= std::time::Duration::from_secs(300),
+            None => true,
+        };
+        if expired {
+            *guard = Some((std::time::Instant::now(), HashMap::new()));
+        }
+        let map = &mut guard.as_mut().unwrap().1;
+        for (path, major) in results {
+            map.entry(path).or_insert(major);
+        }
+    }
+    let guard = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let empty = HashMap::new();
+    let map = guard
+        .as_ref()
+        .map(|(_, map)| map)
+        .unwrap_or(&empty);
+    candidates
+        .iter()
+        .map(|candidate| (candidate.clone(), map.get(candidate).copied().flatten()))
+        .collect()
+}
+
 pub(crate) fn find_java(preferred: Option<&str>, required: u32) -> Result<PathBuf, String> {
     let candidates = collect_java_candidates(preferred);
+    let probed = probe_java_map(&candidates);
     let mut detected: Vec<(u32, PathBuf)> = Vec::new();
     for candidate in candidates {
-        if let Some(major) = java_major(&candidate) {
-            detected.push((major, candidate));
+        if let Some(Some(major)) = probed.get(&candidate) {
+            detected.push((*major, candidate));
         }
     }
     if detected.is_empty() {
@@ -915,6 +1142,84 @@ fn authlib_args(authlib: Option<&crate::yggdrasil::LaunchAuthlib>) -> Vec<String
     args
 }
 
+/// GC 优化预设（HMCL 社区长期验证的 MC 调优集合，含 fml 证书容忍
+/// flags，修复著名的老 Forge 警告）。ZGC 在 Windows 需 JDK 15+，
+/// 21+ 追加 ZGenerational，不满足时回退 G1。返回 None 表示不注入。
+pub(crate) fn gc_preset_args(gc: &str, java_major: u32) -> Option<Vec<String>> {
+    let common: Vec<String> = vec![
+        "-XX:-OmitStackTraceInFastThrow".into(),
+        "-Dfml.ignoreInvalidMinecraftCertificates=true".into(),
+        "-Dfml.ignorePatchDiscrepancies=true".into(),
+    ];
+    match gc {
+        "g1" => {
+            let mut flags = vec![
+                // G1NewSizePercent/G1ReservePercent 是实验选项，解锁开关必须
+                // 在其之前（冒烟实测 JVM 拒绝启动：The unlock option must
+                // precede）。
+                "-XX:+UnlockExperimentalVMOptions".into(),
+                "-XX:+UseG1GC".into(),
+                "-XX:-UseAdaptiveSizePolicy".into(),
+                "-XX:G1NewSizePercent=20".into(),
+                "-XX:G1ReservePercent=20".into(),
+                "-XX:MaxGCPauseMillis=50".into(),
+            ];
+            flags.extend(common);
+            Some(flags)
+        }
+        "zgc" => {
+            if java_major < 15 {
+                return gc_preset_args("g1", java_major);
+            }
+            let mut flags = vec!["-XX:+UseZGC".into()];
+            if java_major >= 21 {
+                flags.push("-XX:+ZGenerational".into());
+            }
+            flags.extend(common);
+            Some(flags)
+        }
+        _ => None,
+    }
+}
+
+/// 已存在的 asset index 解析；不存在返回 None（调用方按旧行为兜底）。
+fn parse_asset_index_if_exists(path: &Path) -> Result<Option<AssetObjects>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|e| format!("资源索引解析失败：{e}"))
+}
+
+/// 从索引对象生成缺失的资源下载清单（已存在的按哈希路径跳过）。
+fn build_asset_items(parsed: &AssetObjects, assets_root: &Path) -> Vec<DownloadItem> {
+    let mut items = Vec::new();
+    for (name, object) in &parsed.objects {
+        if object.hash.len() < 2 {
+            continue;
+        }
+        let relative = format!("objects/{}/{}", &object.hash[..2], object.hash);
+        let target = assets_root.join(&relative);
+        if target.exists() {
+            continue;
+        }
+        items.push(DownloadItem {
+            url: format!(
+                "https://resources.download.minecraft.net/{}/{}",
+                &object.hash[..2],
+                object.hash
+            ),
+            path: target,
+            sha1: Some(object.hash.clone()),
+            size: object.size,
+        });
+        let _ = name;
+    }
+    items
+}
+
 pub async fn prepare(
     ctx: &LaunchContext,
     report: &(dyn Fn(&str) + Send + Sync),
@@ -937,6 +1242,10 @@ pub async fn prepare(
     let effective_source = resolve_download_source(&bootstrap_client, &ctx.download_source).await;
     if ctx.download_source == "auto" {
         report(&format!("自动下载源：{}", effective_source));
+    }
+    let pipeline = pipeline_of(&ctx.pipeline);
+    if pipeline == Pipeline::Compat {
+        report("兼容模式：沿用旧版启动管线（无并行/重试/JVM 优化）");
     }
     let version = load_version(ctx, &ctx.version_id, 0)?;
     let required_java = version
@@ -975,6 +1284,12 @@ pub async fn prepare(
         .client_jar_id
         .clone()
         .unwrap_or_else(|| ctx.version_id.clone());
+    // client jar 的 SHA-1 用于 natives 缓存标记（见下方 marker 逻辑）。
+    let client_jar_sha = version
+        .downloads
+        .as_ref()
+        .and_then(|value| value.client.as_ref())
+        .and_then(|artifact| artifact.sha1.clone());
     let client_jar =
         match existing_version_file(ctx, &client_jar_id, &format!("{client_jar_id}.jar")) {
             Some(path) => path,
@@ -1069,12 +1384,13 @@ pub async fn prepare(
     let asset_index_path = assets_root
         .join("indexes")
         .join(format!("{asset_index_id}.json"));
+    let mut asset_index_item: Option<DownloadItem> = None;
     if !asset_index_path.exists() {
         let index = version
             .asset_index
             .as_ref()
             .ok_or_else(|| "版本 JSON 缺少 assetIndex 下载信息".to_string())?;
-        downloads.push(DownloadItem {
+        asset_index_item = Some(DownloadItem {
             url: index.url.clone(),
             path: asset_index_path.clone(),
             sha1: index.sha1.clone(),
@@ -1100,42 +1416,68 @@ pub async fn prepare(
         }
     }
 
-    download_all(
-        &client,
-        downloads,
-        &effective_source,
-        &client_jar_id,
-        report,
-    )
-    .await?;
-
-    if asset_index_path.exists() {
-        let text = fs::read_to_string(&asset_index_path).map_err(|e| e.to_string())?;
-        let parsed: AssetObjects =
-            serde_json::from_str(&text).map_err(|e| format!("资源索引解析失败：{e}"))?;
-        let mut items = Vec::new();
-        for (name, object) in &parsed.objects {
-            if object.hash.len() < 2 {
-                continue;
+    // 下载阶段。native：资源索引单独先取回（绝大多数启动已缓存，
+    // miss 时仅 ~1 MB），随后 client jar、libraries 与几千个资源对象
+    // 合成一个大批次并行下载，消除旧两阶段间的串行等待；compat：
+    // 完全沿用旧的两阶段顺序。
+    let parsed_assets = match pipeline {
+        Pipeline::Native => {
+            if let Some(item) = &asset_index_item {
+                download_one(
+                    &client,
+                    item,
+                    &effective_source,
+                    &client_jar_id,
+                    pipeline,
+                )
+                .await?;
             }
-            let relative = format!("objects/{}/{}", &object.hash[..2], object.hash);
-            let target = assets_root.join(&relative);
-            if target.exists() {
-                continue;
+            let parsed = parse_asset_index_if_exists(&asset_index_path)?;
+            let mut batch = downloads;
+            if let Some(parsed) = &parsed {
+                batch.extend(build_asset_items(parsed, &assets_root));
             }
-            items.push(DownloadItem {
-                url: format!(
-                    "https://resources.download.minecraft.net/{}/{}",
-                    &object.hash[..2],
-                    object.hash
-                ),
-                path: target,
-                sha1: Some(object.hash.clone()),
-                size: object.size,
-            });
-            let _ = name;
+            download_all(
+                &client,
+                batch,
+                &effective_source,
+                &client_jar_id,
+                pipeline,
+                report,
+            )
+            .await?;
+            parsed
         }
-        download_all(&client, items, &effective_source, &client_jar_id, report).await?;
+        Pipeline::Compat => {
+            let mut batch = downloads;
+            if let Some(item) = asset_index_item {
+                batch.push(item);
+            }
+            download_all(
+                &client,
+                batch,
+                &effective_source,
+                &client_jar_id,
+                pipeline,
+                report,
+            )
+            .await?;
+            let parsed = parse_asset_index_if_exists(&asset_index_path)?;
+            if let Some(parsed) = &parsed {
+                download_all(
+                    &client,
+                    build_asset_items(parsed, &assets_root),
+                    &effective_source,
+                    &client_jar_id,
+                    pipeline,
+                    report,
+                )
+                .await?;
+            }
+            parsed
+        }
+    };
+    if let Some(parsed) = &parsed_assets {
         if parsed.virtual_ || parsed.map_to_resources {
             let virtual_dir = assets_root.join(if parsed.map_to_resources {
                 "resources"
@@ -1161,13 +1503,21 @@ pub async fn prepare(
     let natives_dir = ctx.game_dir.join("natives").join(&ctx.version_id);
     if !natives_jobs.is_empty() {
         let marker = natives_dir.join(".aurora-natives");
-        if !marker.exists() {
+        // marker 记录 client jar 的 SHA-1：同版本号但 jar 变化（修复重装
+        // 等）时自动重解压。旧版 marker 内容固定 "ok"，升级后首次启动会
+        // 重解压一次并迁移到新格式；client jar 无 sha1 信息时保持 "ok"。
+        let jar_stamp = client_jar_sha.clone().unwrap_or_else(|| "ok".into());
+        let stale = match fs::read_to_string(&marker) {
+            Ok(content) => content.trim() != jar_stamp,
+            Err(_) => true,
+        };
+        if stale {
             let _ = fs::remove_dir_all(&natives_dir);
             fs::create_dir_all(&natives_dir).map_err(|e| e.to_string())?;
             for (archive, exclude) in &natives_jobs {
                 extract_natives(archive, &natives_dir, exclude, report)?;
             }
-            fs::write(&marker, b"ok").map_err(|e| e.to_string())?;
+            fs::write(&marker, jar_stamp).map_err(|e| e.to_string())?;
         }
     }
 
@@ -1205,8 +1555,8 @@ pub async fn prepare(
     placeholders.insert("classpath_separator", ";".into());
     placeholders.insert("library_directory", libraries_dir.clone());
     placeholders.insert("user_properties", "{}".into());
-    placeholders.insert("resolution_width", "854".into());
-    placeholders.insert("resolution_height", "480".into());
+    placeholders.insert("resolution_width", ctx.window_width.to_string());
+    placeholders.insert("resolution_height", ctx.window_height.to_string());
 
     let mut args: Vec<String> = Vec::new();
     if let Some(jvm) = version
@@ -1257,6 +1607,29 @@ pub async fn prepare(
             }
         }
     }
+    // JVM 优化预设（仅 native 管线注入）：收集器组合冲突会让 JVM 直接
+    // 拒绝启动，注入前先移除版本 JSON 自带的收集器 flags，再补预设；
+    // 额外 JVM 参数随后追加。
+    if pipeline == Pipeline::Native && ctx.jvm_optimize {
+        if let Some(preset) = gc_preset_args(&ctx.jvm_gc, required_java) {
+            const COLLECTORS: [&str; 5] = [
+                "-XX:+UseG1GC",
+                "-XX:+UseZGC",
+                "-XX:+UseSerialGC",
+                "-XX:+UseParallelGC",
+                "-XX:+UseConcMarkSweepGC",
+            ];
+            args.retain(|arg| !COLLECTORS.contains(&arg.as_str()));
+            for flag in preset {
+                if !args.contains(&flag) {
+                    args.push(flag);
+                }
+            }
+        }
+        for arg in ctx.extra_jvm_args.split_whitespace() {
+            args.push(arg.to_string());
+        }
+    }
     args.push(format!("-Xmx{}M", ctx.memory_mb.max(512)));
     args.push(
         version
@@ -1275,6 +1648,14 @@ pub async fn prepare(
     } else if let Some(legacy) = &version.minecraft_arguments {
         for arg in legacy.split_whitespace() {
             args.push(replace_placeholders(arg, &placeholders));
+        }
+    }
+    if pipeline == Pipeline::Native {
+        for arg in ctx.extra_game_args.split_whitespace() {
+            args.push(arg.to_string());
+        }
+        if ctx.fullscreen {
+            args.push("--fullscreen".into());
         }
     }
 
@@ -1377,6 +1758,46 @@ pub async fn smoke(ctx: &LaunchContext, seconds: u64) -> Result<String, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gc_presets_follow_settings_and_java() {
+        // g1：完整预设，实验选项解锁开关必须在前。
+        let g1 = gc_preset_args("g1", 21).unwrap();
+        assert!(g1.contains(&"-XX:+UseG1GC".to_string()));
+        assert!(g1.contains(&"-XX:MaxGCPauseMillis=50".to_string()));
+        assert!(g1.contains(&"-Dfml.ignoreInvalidMinecraftCertificates=true".to_string()));
+        let unlock = g1
+            .iter()
+            .position(|arg| arg == "-XX:+UnlockExperimentalVMOptions")
+            .unwrap();
+        let experimental = g1
+            .iter()
+            .position(|arg| arg.starts_with("-XX:G1NewSizePercent"))
+            .unwrap();
+        assert!(unlock < experimental);
+        // off：不注入。
+        assert!(gc_preset_args("off", 21).is_none());
+        // zgc：21+ 带 ZGenerational；老 JVM（Java 8）回退 G1。
+        let zgc21 = gc_preset_args("zgc", 21).unwrap();
+        assert!(zgc21.contains(&"-XX:+UseZGC".to_string()));
+        assert!(zgc21.contains(&"-XX:+ZGenerational".to_string()));
+        let zgc17 = gc_preset_args("zgc", 17).unwrap();
+        assert!(zgc17.contains(&"-XX:+UseZGC".to_string()));
+        assert!(!zgc17.contains(&"-XX:+ZGenerational".to_string()));
+        assert_eq!(
+            gc_preset_args("zgc", 8).unwrap(),
+            gc_preset_args("g1", 8).unwrap()
+        );
+    }
+
+    #[test]
+    fn pipeline_mode_parsing() {
+        assert_eq!(pipeline_of("native"), Pipeline::Native);
+        assert_eq!(pipeline_of("compat"), Pipeline::Compat);
+        // 未知值一律回落 native（设置项已做白名单归一，这里只是防御）。
+        assert_eq!(pipeline_of(""), Pipeline::Native);
+        assert_eq!(pipeline_of("whatever"), Pipeline::Native);
+    }
 
     #[test]
     fn maven_path_matches_repository_layout() {

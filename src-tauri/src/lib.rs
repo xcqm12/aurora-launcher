@@ -86,10 +86,47 @@ pub(crate) struct AppSettings {
     pub(crate) ai_key: String,
     #[serde(default)]
     pub(crate) ai_name: String,
+    /// 启动管线：native（Rust 原生快速管线，默认）| compat（兼容模式，沿用旧逻辑）。
+    #[serde(default = "default_pipeline")]
+    pub(crate) launch_pipeline: String,
+    /// JVM 优化预设开关（仅 native 管线生效）。
+    #[serde(default = "default_true")]
+    pub(crate) jvm_optimize: bool,
+    /// GC 预设：g1（默认）| zgc | off。
+    #[serde(default = "default_jvm_gc")]
+    pub(crate) jvm_gc: String,
+    /// 追加的 JVM 参数（空白分隔）与游戏参数。
+    #[serde(default)]
+    pub(crate) extra_jvm_args: String,
+    #[serde(default)]
+    pub(crate) extra_game_args: String,
+    /// 默认游戏窗口尺寸与全屏（替换旧硬编码 854×480）。
+    #[serde(default = "default_window_width")]
+    pub(crate) window_width: u32,
+    #[serde(default = "default_window_height")]
+    pub(crate) window_height: u32,
+    #[serde(default)]
+    pub(crate) window_fullscreen: bool,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_pipeline() -> String {
+    "native".into()
+}
+
+fn default_jvm_gc() -> String {
+    "g1".into()
+}
+
+fn default_window_width() -> u32 {
+    854
+}
+
+fn default_window_height() -> u32 {
+    480
 }
 
 impl Default for AppSettings {
@@ -110,6 +147,14 @@ impl Default for AppSettings {
             ai_key: String::new(),
             ai_name: String::new(),
             active_account: String::new(),
+            launch_pipeline: "native".into(),
+            jvm_optimize: true,
+            jvm_gc: "g1".into(),
+            extra_jvm_args: String::new(),
+            extra_game_args: String::new(),
+            window_width: 854,
+            window_height: 480,
+            window_fullscreen: false,
         }
     }
 }
@@ -837,16 +882,33 @@ fn detect_java() -> Vec<JavaRuntime> {
 
 #[tauri::command]
 async fn minecraft_manifest(app: tauri::AppHandle) -> Result<VersionManifest, String> {
-    let response: serde_json::Value = http_client(&app)?
-        .get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
-        .send()
+    // 旧实现直连官方且无重试，弱网下版本列表直接失败；现走镜像候选
+    // （与启动管线同一套 candidates 规则）并带重试。
+    let client = http_client(&app)?;
+    let source = read_settings(&app).download_source;
+    let manifest_url = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+    let mut last_error = String::new();
+    let mut response: Option<serde_json::Value> = None;
+    for candidate in launch::candidates(manifest_url, &source, "") {
+        match crate::download_bytes_retry(
+            || client.get(&candidate),
+            "版本清单",
+            DOWNLOAD_ATTEMPTS,
+            |_, _| {},
+        )
         .await
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json()
-        .await
-        .map_err(|e| e.to_string())?;
+        {
+            Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                Ok(value) => {
+                    response = Some(value);
+                    break;
+                }
+                Err(error) => last_error = error.to_string(),
+            },
+            Err(error) => last_error = error,
+        }
+    }
+    let response = response.ok_or_else(|| format!("获取版本清单失败：{last_error}"))?;
     let latest_release = response
         .pointer("/latest/release")
         .and_then(|v| v.as_str())
@@ -1606,6 +1668,39 @@ fn migrate_data_subdir(from: &Path, to: &Path) -> std::io::Result<u32> {
     Ok(copied)
 }
 
+/// 下载源白名单：official/bmclapi/auto + custom:<base>。
+/// 旧实现会把 custom:<base> 静默重置成 official（导致自定义镜像失效）。
+fn normalize_download_source(value: &str) -> String {
+    let trimmed = value.trim();
+    match trimmed {
+        "bmclapi" | "auto" | "official" => trimmed.to_string(),
+        other => {
+            if other.starts_with("custom:") && other["custom:".len()..].trim().is_empty() {
+                "official".into()
+            } else if other.starts_with("custom:") {
+                other.to_string()
+            } else {
+                "official".into()
+            }
+        }
+    }
+}
+
+fn normalize_pipeline(value: &str) -> String {
+    match value.trim() {
+        "compat" => "compat".into(),
+        _ => "native".into(),
+    }
+}
+
+fn normalize_jvm_gc(value: &str) -> String {
+    match value.trim() {
+        "zgc" => "zgc".into(),
+        "off" => "off".into(),
+        _ => "g1".into(),
+    }
+}
+
 #[tauri::command]
 fn save_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), String> {
     let proxy = normalized_proxy(&settings.proxy)?;
@@ -1614,11 +1709,7 @@ fn save_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), Str
         proxy,
         sakura_enabled: settings.sakura_enabled,
         shared_game_dir: settings.shared_game_dir.trim().to_string(),
-        download_source: match settings.download_source.as_str() {
-            "bmclapi" => "bmclapi".into(),
-            "auto" => "auto".into(),
-            _ => "official".into(),
-        },
+        download_source: normalize_download_source(&settings.download_source),
         ms_client_id: settings.ms_client_id.trim().to_string(),
         active_account: settings.active_account,
         mp_peers: settings.mp_peers.trim().to_string(),
@@ -1630,6 +1721,14 @@ fn save_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), Str
         ai_model: settings.ai_model.trim().to_string(),
         ai_key: settings.ai_key,
         ai_name: settings.ai_name.trim().to_string(),
+        launch_pipeline: normalize_pipeline(&settings.launch_pipeline),
+        jvm_optimize: settings.jvm_optimize,
+        jvm_gc: normalize_jvm_gc(&settings.jvm_gc),
+        extra_jvm_args: settings.extra_jvm_args.trim().to_string(),
+        extra_game_args: settings.extra_game_args.trim().to_string(),
+        window_width: settings.window_width.clamp(100, 7680),
+        window_height: settings.window_height.clamp(100, 4320),
+        window_fullscreen: settings.window_fullscreen,
     };
     // 先把带新 data_dir 指针的引导配置写回默认位置，使 data_dir() 立即
     // 指向新目录；然后把旧目录里的数据复制过去（保留原件作备份）。
@@ -2745,6 +2844,14 @@ async fn launch_instance(
         ai_args,
         download_source: settings.download_source,
         proxy: settings.proxy,
+        pipeline: normalize_pipeline(&settings.launch_pipeline),
+        jvm_optimize: settings.jvm_optimize,
+        jvm_gc: normalize_jvm_gc(&settings.jvm_gc),
+        extra_jvm_args: settings.extra_jvm_args.clone(),
+        extra_game_args: settings.extra_game_args.clone(),
+        window_width: settings.window_width.clamp(100, 7680),
+        window_height: settings.window_height.clamp(100, 4320),
+        fullscreen: settings.window_fullscreen,
     };
     state.set_status(&instance_id, "preparing");
     state.push_log(&instance_id, "[Aurora] 开始准备启动文件");
@@ -3047,6 +3154,8 @@ pub fn smoke_launch(
     java: &str,
     username: &str,
     seconds: u64,
+    pipeline: &str,
+    jvm_optimize: bool,
 ) -> Result<String, String> {
     let shared = PathBuf::from(shared_root);
     if !shared.exists() {
@@ -3075,6 +3184,14 @@ pub fn smoke_launch(
         ai_args: Vec::new(),
         download_source: "official".into(),
         proxy: String::new(),
+        pipeline: pipeline.into(),
+        jvm_optimize,
+        jvm_gc: "g1".into(),
+        extra_jvm_args: String::new(),
+        extra_game_args: String::new(),
+        window_width: 854,
+        window_height: 480,
+        fullscreen: false,
     };
     let result = tauri::async_runtime::block_on(launch::smoke(&context, seconds));
     result
@@ -3147,6 +3264,35 @@ mod tests {
             safe_filename("ok-mod 1.2.jar"),
             Some("ok-mod 1.2.jar".into())
         );
+    }
+
+    #[test]
+    fn download_source_keeps_custom_mirror() {
+        // 回归：旧 save_settings 会把 custom:<base> 静默重置成 official，
+        // 自定义镜像设置保存后即失效。
+        assert_eq!(
+            normalize_download_source("custom:https://mc.elingfeng.com"),
+            "custom:https://mc.elingfeng.com"
+        );
+        assert_eq!(normalize_download_source("bmclapi"), "bmclapi");
+        assert_eq!(normalize_download_source("auto"), "auto");
+        assert_eq!(normalize_download_source("official"), "official");
+        // 空地址的 custom 视为未配置，回官方。
+        assert_eq!(normalize_download_source("custom:"), "official");
+        assert_eq!(normalize_download_source("custom:  "), "official");
+        // 未知值兜底。
+        assert_eq!(normalize_download_source("junk"), "official");
+    }
+
+    #[test]
+    fn pipeline_and_gc_normalize_to_whitelist() {
+        assert_eq!(normalize_pipeline("native"), "native");
+        assert_eq!(normalize_pipeline("compat"), "compat");
+        assert_eq!(normalize_pipeline("junk"), "native");
+        assert_eq!(normalize_jvm_gc("zgc"), "zgc");
+        assert_eq!(normalize_jvm_gc("off"), "off");
+        assert_eq!(normalize_jvm_gc("g1"), "g1");
+        assert_eq!(normalize_jvm_gc("junk"), "g1");
     }
 
     #[test]

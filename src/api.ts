@@ -113,6 +113,7 @@ export type AppSettings = {
   window_width?: number;
   window_height?: number;
   window_fullscreen?: boolean;
+  ui_theme?: string;
 };
 export type ProxyTest = { ok: boolean; status: number; latency_ms: number; message: string };
 export type SakuraBackground = { data_url: string; cached: boolean };

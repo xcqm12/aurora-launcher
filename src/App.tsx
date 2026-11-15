@@ -36,6 +36,8 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
+  Sun,
+  Moon,
   Trash2,
   Wrench,
   X,
@@ -291,6 +293,36 @@ function App() {
     }
   };
 
+  /* 界面主题：把解析后的值写到 <html data-theme>，CSS 据此切换 token。 */
+  const resolveTheme = (mode: string) =>
+    mode === "system"
+      ? window.matchMedia("(prefers-color-scheme: light)").matches
+        ? "light"
+        : "dark"
+      : mode === "light"
+        ? "light"
+        : "dark";
+
+  useEffect(() => {
+    const apply = () => {
+      const resolved = resolveTheme(settings.ui_theme || "dark");
+      document.documentElement.dataset.theme = resolved;
+      document
+        .querySelector('meta[name="theme-color"]')
+        ?.setAttribute("content", resolved === "light" ? "#eef2f8" : "#080b14");
+    };
+    apply();
+    if ((settings.ui_theme || "dark") !== "system") return;
+    const mq = window.matchMedia("(prefers-color-scheme: light)");
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, [settings.ui_theme]);
+
+  const toggleTheme = () => {
+    const next = resolveTheme(settings.ui_theme || "dark") === "light" ? "dark" : "light";
+    void saveSettings({ ...settings, ui_theme: next });
+  };
+
   const openExternal = (url: string) => {
     void api.openExternal(url).catch((error) => setNotice(String(error)));
   };
@@ -430,6 +462,13 @@ function App() {
                 ))}
               </select>
             )}
+            <button
+              className="icon-button"
+              onClick={toggleTheme}
+              title={resolveTheme(settings.ui_theme || "dark") === "light" ? "切换到深色主题" : "切换到亮色主题"}
+            >
+              {resolveTheme(settings.ui_theme || "dark") === "light" ? <Moon size={18} /> : <Sun size={18} />}
+            </button>
             <button className="icon-button" onClick={() => setView("settings")} title="设置">
               <Settings2 size={18} />
             </button>
@@ -4056,6 +4095,32 @@ function SettingsPage({
       <section className="settings-card">
         <div className="settings-heading">
           <div className="setting-icon network">
+            <Monitor size={22} />
+          </div>
+          <div>
+            <h3>外观</h3>
+            <p>极光渐变签名在深色与亮色主题下保持一致；顶栏的日 / 月按钮可一键切换。</p>
+          </div>
+        </div>
+        <label className="field-label">
+          界面主题
+          <select
+            value={settings.ui_theme || "dark"}
+            onChange={(event) => void onSave({ ...settings, ui_theme: event.target.value })}
+          >
+            <option value="dark">深色（默认）</option>
+            <option value="light">亮色</option>
+            <option value="system">跟随系统</option>
+          </select>
+        </label>
+        <p className="security-note">
+          「跟随系统」监听 Windows 深浅色设置自动切换；主题偏好立即保存并即时生效。
+        </p>
+      </section>
+
+      <section className="settings-card">
+        <div className="settings-heading">
+          <div className="setting-icon network">
             <Globe2 size={22} />
           </div>
           <div>
@@ -4570,11 +4635,21 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
     window.addEventListener("resize", resize);
 
     const freq = new Uint8Array(1024);
+    // 频谱画笔色跟随主题：CSS 变量在 :root / [data-theme=light] 中定义，
+    // 每帧读取（一次 getComputedStyle，开销可忽略），主题切换即时生效。
+    const viz = (name: string, fallback: string) =>
+      getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
     const loop = (t: number) => {
       raf = requestAnimationFrame(loop);
       if (!vctx || !canvas) return;
+      const cGrid = viz("--viz-grid", "rgba(95,232,255,.05)");
+      const cTop = viz("--viz-bar-top", "rgba(95,232,255,.95)");
+      const cMid = viz("--viz-bar-mid", "rgba(126,150,255,.75)");
+      const cLow = viz("--viz-bar-low", "rgba(143,124,255,.28)");
+      const cCap = viz("--viz-cap", "rgba(205,246,255,.7)");
+      const cBase = viz("--viz-base", "rgba(95,232,255,.35)");
       vctx.clearRect(0, 0, W, H);
-      vctx.strokeStyle = "rgba(95,232,255,.05)";
+      vctx.strokeStyle = cGrid;
       vctx.lineWidth = 1;
       for (let gx = 0; gx < W; gx += 44) { vctx.beginPath(); vctx.moveTo(gx, 0); vctx.lineTo(gx, H); vctx.stroke(); }
       for (let gy = 0; gy < H; gy += 44) { vctx.beginPath(); vctx.moveTo(0, gy); vctx.lineTo(W, gy); vctx.stroke(); }
@@ -4594,15 +4669,15 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
         const bh = Math.max(3, v * (H - 52));
         const x = b * (bw + gap), y = H - 26 - bh;
         const grad = vctx.createLinearGradient(0, y, 0, H - 26);
-        grad.addColorStop(0, "rgba(95,232,255,.95)");
-        grad.addColorStop(0.6, "rgba(126,150,255,.75)");
-        grad.addColorStop(1, "rgba(143,124,255,.28)");
+        grad.addColorStop(0, cTop);
+        grad.addColorStop(0.6, cMid);
+        grad.addColorStop(1, cLow);
         vctx.fillStyle = grad;
         vctx.fillRect(x, y, bw, bh);
-        vctx.fillStyle = "rgba(205,246,255,.7)";
+        vctx.fillStyle = cCap;
         vctx.fillRect(x, y - 3, bw, 2);
       }
-      vctx.fillStyle = "rgba(95,232,255,.35)";
+      vctx.fillStyle = cBase;
       vctx.fillRect(0, H - 25, W, 1.4);
 
       if (barsRef.current) {

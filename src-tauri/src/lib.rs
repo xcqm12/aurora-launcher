@@ -107,6 +107,9 @@ pub(crate) struct AppSettings {
     pub(crate) window_height: u32,
     #[serde(default)]
     pub(crate) window_fullscreen: bool,
+    /// 界面主题：dark（默认）| light | system（跟随系统深浅色）。
+    #[serde(default)]
+    pub(crate) ui_theme: String,
 }
 
 fn default_true() -> bool {
@@ -155,6 +158,7 @@ impl Default for AppSettings {
             window_width: 854,
             window_height: 480,
             window_fullscreen: false,
+            ui_theme: String::new(),
         }
     }
 }
@@ -954,6 +958,48 @@ async fn minecraft_manifest(app: tauri::AppHandle) -> Result<VersionManifest, St
     })
 }
 
+/// 查询是否包含 CJK 表意文字（含扩展 A 与兼容表意区）：中文模组搜索
+/// 走 MCIM（mcimirror.top，PCL2/HMCL 同款社区翻译索引），官方 API 对
+/// 中文关键词基本无结果。
+fn contains_cjk(query: &str) -> bool {
+    query.chars().any(|c| {
+        matches!(c as u32, 0x4E00..=0x9FFF | 0x3400..=0x4DBF | 0xF900..=0xFAFF)
+    })
+}
+
+const MCIM_SEARCH_BASE: &str = "https://mod.mcimirror.top";
+const MODRINTH_SEARCH_URL: &str = "https://api.modrinth.com/v2/search";
+const CURSEFORGE_SEARCH_URL: &str = "https://api.curseforge.com/v1/mods/search";
+
+/// Modrinth 搜索 URL 候选：中文查询优先 MCIM（响应结构与官方一致），
+/// 网络失败回落官方；英文查询保持官方直连。
+fn modrinth_search_candidates(query: &str) -> Vec<String> {
+    if contains_cjk(query) {
+        vec![
+            format!("{MCIM_SEARCH_BASE}/modrinth/v2/search"),
+            MODRINTH_SEARCH_URL.to_string(),
+        ]
+    } else {
+        vec![MODRINTH_SEARCH_URL.to_string()]
+    }
+}
+
+/// CurseForge 搜索 URL 候选：用户自定义代理端点优先；否则中文查询走
+/// MCIM（免 API Key），官方兜底。
+fn curseforge_search_candidates(query: &str, proxy_base: Option<&str>) -> Vec<String> {
+    if let Some(base) = proxy_base {
+        return vec![format!("{base}/search")];
+    }
+    if contains_cjk(query) {
+        vec![
+            format!("{MCIM_SEARCH_BASE}/curseforge/v1/mods/search"),
+            CURSEFORGE_SEARCH_URL.to_string(),
+        ]
+    } else {
+        vec![CURSEFORGE_SEARCH_URL.to_string()]
+    }
+}
+
 #[tauri::command]
 async fn search_modrinth(
     app: tauri::AppHandle,
@@ -961,25 +1007,37 @@ async fn search_modrinth(
     project_type: Option<String>,
     game_version: Option<String>,
 ) -> Result<Vec<SearchResult>, String> {
-    let mut request = http_client(&app)?
-        .get("https://api.modrinth.com/v2/search")
-        .query(&[("query", query.as_str()), ("limit", "24")]);
-    if let Some(kind) = project_type {
-        request = request.query(&[("facets", format!("[[\"project_type:{}\"]]", kind))]);
+    let client = http_client(&app)?;
+    let mut last_error = String::new();
+    let mut response: Option<serde_json::Value> = None;
+    for url in modrinth_search_candidates(&query) {
+        let mut request = client
+            .get(&url)
+            .query(&[("query", query.as_str()), ("limit", "24")]);
+        if let Some(kind) = project_type.as_deref() {
+            request = request.query(&[("facets", format!("[[\"project_type:{}\"]]", kind))]);
+        }
+        if let Some(version) = game_version.as_deref() {
+            request = request.query(&[("facets", format!("[[\"versions:{}\"]]", version))]);
+        }
+        match request
+            .header("User-Agent", "AuroraLauncher/0.4 (launcher)")
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+                Ok(value) => {
+                    response = Some(value);
+                    break;
+                }
+                Err(error) => last_error = error.to_string(),
+            },
+            Ok(resp) => last_error = format!("HTTP {}", resp.status().as_u16()),
+            Err(error) => last_error = error.to_string(),
+        }
     }
-    if let Some(version) = game_version {
-        request = request.query(&[("facets", format!("[[\"versions:{}\"]]", version))]);
-    }
-    let response: serde_json::Value = request
-        .header("User-Agent", "AuroraLauncher/0.4 (launcher)")
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json()
-        .await
-        .map_err(|e| e.to_string())?;
+    let response =
+        response.ok_or_else(|| format!("Modrinth 搜索失败：{last_error}"))?;
     Ok(response
         .get("hits")
         .and_then(|v| v.as_array())
@@ -1025,37 +1083,51 @@ async fn search_curseforge(
     game_version: Option<String>,
     class_id: Option<u32>,
 ) -> Result<Vec<SearchResult>, String> {
-    let proxy = curseforge_proxy();
-    let endpoint = proxy
-        .as_ref()
-        .map(|base| format!("{base}/search"))
-        .unwrap_or_else(|| "https://api.curseforge.com/v1/mods/search".into());
-    let mut request = http_client(&app)?.get(endpoint).query(&[
-        ("gameId", "432"),
-        ("searchFilter", query.as_str()),
-        ("pageSize", "24"),
-    ]);
-    if proxy.is_none() {
-        request = request.header("x-api-key", curseforge_key(&app)?);
+    let client = http_client(&app)?;
+    let mut last_error = String::new();
+    let mut response: Option<serde_json::Value> = None;
+    for url in curseforge_search_candidates(&query, curseforge_proxy().as_deref()) {
+        let mut request = client.get(&url).query(&[
+            ("gameId", "432"),
+            ("searchFilter", query.as_str()),
+            ("pageSize", "24"),
+        ]);
+        // 官方端点需要 API Key；MCIM 镜像免 Key。无 Key 时跳过官方候选。
+        if url == CURSEFORGE_SEARCH_URL {
+            match curseforge_key(&app) {
+                Ok(key) => {
+                    request = request.header("x-api-key", key);
+                }
+                Err(error) => {
+                    last_error = error;
+                    continue;
+                }
+            }
+        }
+        if let Some(v) = game_version.as_deref() {
+            request = request.query(&[("gameVersion", v)]);
+        }
+        if let Some(c) = class_id {
+            request = request.query(&[("classId", c.to_string())]);
+        }
+        match request
+            .header("User-Agent", "AuroraLauncher/0.4")
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+                Ok(value) => {
+                    response = Some(value);
+                    break;
+                }
+                Err(error) => last_error = error.to_string(),
+            },
+            Ok(resp) => last_error = format!("HTTP {}", resp.status().as_u16()),
+            Err(error) => last_error = error.to_string(),
+        }
     }
-    if let Some(v) = game_version {
-        request = request.query(&[("gameVersion", v)]);
-    }
-    if let Some(c) = class_id {
-        request = request.query(&[("classId", c.to_string())]);
-    }
-    let response = request
-        .header("User-Agent", "AuroraLauncher/0.4")
-        .send()
-        .await
-        .map_err(|e| format!("CurseForge 请求失败：{e}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "CurseForge 返回 HTTP {}。请在 console.curseforge.com 生成 API Key，并确认它可访问官方 API。",
-            response.status().as_u16()
-        ));
-    }
-    let response: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    let response = response
+        .ok_or_else(|| format!("CurseForge 搜索失败：{last_error}"))?;
     Ok(response
         .get("data")
         .and_then(|v| v.as_array())
@@ -1701,6 +1773,15 @@ fn normalize_jvm_gc(value: &str) -> String {
     }
 }
 
+/// 主题白名单：dark/light/system；空值与未知值回落 dark（旧配置兼容）。
+fn normalize_ui_theme(value: &str) -> String {
+    match value.trim() {
+        "light" => "light".into(),
+        "system" => "system".into(),
+        _ => "dark".into(),
+    }
+}
+
 #[tauri::command]
 fn save_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), String> {
     let proxy = normalized_proxy(&settings.proxy)?;
@@ -1729,6 +1810,7 @@ fn save_settings(app: tauri::AppHandle, settings: AppSettings) -> Result<(), Str
         window_width: settings.window_width.clamp(100, 7680),
         window_height: settings.window_height.clamp(100, 4320),
         window_fullscreen: settings.window_fullscreen,
+        ui_theme: normalize_ui_theme(&settings.ui_theme),
     };
     // 先把带新 data_dir 指针的引导配置写回默认位置，使 data_dir() 立即
     // 指向新目录；然后把旧目录里的数据复制过去（保留原件作备份）。
@@ -2052,16 +2134,33 @@ async fn modrinth_discover(
     if !query.trim().is_empty() {
         params.push(("query", query.to_string()));
     }
-    let response = client
-        .get("https://api.modrinth.com/v2/search")
-        .query(&params)
-        .send()
-        .await
-        .map_err(|e| format!("Modrinth 请求失败：{e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("Modrinth 返回 HTTP {}", response.status().as_u16()));
+    let candidates = if !query.trim().is_empty() {
+        modrinth_search_candidates(&query)
+    } else {
+        vec![MODRINTH_SEARCH_URL.to_string()]
+    };
+    let mut last_error = String::new();
+    let mut response: Option<serde_json::Value> = None;
+    for url in candidates {
+        let attempt = client
+            .get(&url)
+            .query(&params)
+            .header("User-Agent", "AuroraLauncher/0.4")
+            .send()
+            .await;
+        match attempt {
+            Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+                Ok(value) => {
+                    response = Some(value);
+                    break;
+                }
+                Err(error) => last_error = error.to_string(),
+            },
+            Ok(resp) => last_error = format!("Modrinth 返回 HTTP {}", resp.status().as_u16()),
+            Err(error) => last_error = format!("Modrinth 请求失败：{error}"),
+        }
     }
-    let response: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    let response = response.ok_or_else(|| last_error)?;
     let total = response
         .get("total_hits")
         .and_then(|value| value.as_u64())
@@ -2165,10 +2264,6 @@ async fn curseforge_discover(
     limit: u64,
 ) -> Result<(Vec<DiscoverItem>, u64), String> {
     let proxy = curseforge_proxy();
-    let endpoint = proxy
-        .as_ref()
-        .map(|base| format!("{base}/search"))
-        .unwrap_or_else(|| "https://api.curseforge.com/v1/mods/search".into());
     let mut params: Vec<(&str, String)> = vec![
         ("gameId", "432".into()),
         ("index", offset.to_string()),
@@ -2190,22 +2285,47 @@ async fn curseforge_discover(
             params.push(("modLoaderType", loader_id.to_string()));
         }
     }
-    let mut request = client.get(endpoint).query(&params);
-    if proxy.is_none() {
-        request = request.header("x-api-key", curseforge_key(app)?);
+    let candidates =
+        curseforge_search_candidates(&query, proxy.as_deref());
+    let mut last_error = String::new();
+    let mut response: Option<serde_json::Value> = None;
+    for url in candidates {
+        let mut request = client.get(&url).query(&params);
+        // 官方端点需要 API Key；MCIM 镜像免 Key。无 Key 时跳过官方候选。
+        if url == CURSEFORGE_SEARCH_URL {
+            match curseforge_key(app) {
+                Ok(key) => {
+                    request = request.header("x-api-key", key);
+                }
+                Err(error) => {
+                    last_error = error;
+                    continue;
+                }
+            }
+        }
+        match request
+            .header("User-Agent", "AuroraLauncher/0.4")
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+                Ok(value) => {
+                    response = Some(value);
+                    break;
+                }
+                Err(error) => last_error = error.to_string(),
+            },
+            Ok(resp) => {
+                last_error = format!(
+                    "CurseForge 返回 HTTP {}。官方端点需在 console.curseforge.com 配置 API Key。",
+                    resp.status().as_u16()
+                );
+            }
+            Err(error) => last_error = format!("CurseForge 请求失败：{error}"),
+        }
     }
-    let response = request
-        .header("User-Agent", "AuroraLauncher/0.4")
-        .send()
-        .await
-        .map_err(|e| format!("CurseForge 请求失败：{e}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "CurseForge 返回 HTTP {}。请在 console.curseforge.com 生成有效 API Key。",
-            response.status().as_u16()
-        ));
-    }
-    let response: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+    let response =
+        response.ok_or_else(|| last_error)?;
     let total = response
         .pointer("/pagination/totalCount")
         .and_then(|value| value.as_u64())
@@ -3285,6 +3405,35 @@ mod tests {
     }
 
     #[test]
+    fn cjk_queries_route_through_mcim() {
+        assert!(contains_cjk("背包"));
+        assert!(contains_cjk("杰哥的极限整合"));
+        assert!(contains_cjk("mixed英文背包"));
+        assert!(!contains_cjk("backpack"));
+        assert!(!contains_cjk(""));
+        assert!(!contains_cjk(" furniture")); // 纯 ASCII 空格
+
+        let urls = modrinth_search_candidates("背包");
+        assert_eq!(urls.len(), 2);
+        assert!(urls[0].starts_with("https://mod.mcimirror.top/modrinth/v2/search"));
+        assert_eq!(urls[1], MODRINTH_SEARCH_URL);
+        // 英文查询保持官方直连。
+        assert_eq!(modrinth_search_candidates("backpack"), vec![MODRINTH_SEARCH_URL]);
+
+        // CurseForge：中文走 MCIM（免 Key）+ 官方兜底；自定义代理端点优先。
+        let cf = curseforge_search_candidates("背包", None);
+        assert_eq!(cf.len(), 2);
+        assert!(cf[0].starts_with("https://mod.mcimirror.top/curseforge/v1/mods/search"));
+        assert_eq!(cf[1], CURSEFORGE_SEARCH_URL);
+        let cf_proxy = curseforge_search_candidates("背包", Some("http://127.0.0.1:9999"));
+        assert_eq!(cf_proxy, vec!["http://127.0.0.1:9999/search".to_string()]);
+        assert_eq!(
+            curseforge_search_candidates("backpack", None),
+            vec![CURSEFORGE_SEARCH_URL]
+        );
+    }
+
+    #[test]
     fn pipeline_and_gc_normalize_to_whitelist() {
         assert_eq!(normalize_pipeline("native"), "native");
         assert_eq!(normalize_pipeline("compat"), "compat");
@@ -3293,6 +3442,16 @@ mod tests {
         assert_eq!(normalize_jvm_gc("off"), "off");
         assert_eq!(normalize_jvm_gc("g1"), "g1");
         assert_eq!(normalize_jvm_gc("junk"), "g1");
+    }
+
+    #[test]
+    fn ui_theme_normalize_to_whitelist() {
+        assert_eq!(normalize_ui_theme("dark"), "dark");
+        assert_eq!(normalize_ui_theme("light"), "light");
+        assert_eq!(normalize_ui_theme("system"), "system");
+        // 空值（旧 settings.json 无该字段）与未知值回落 dark。
+        assert_eq!(normalize_ui_theme(""), "dark");
+        assert_eq!(normalize_ui_theme("junk"), "dark");
     }
 
     #[test]

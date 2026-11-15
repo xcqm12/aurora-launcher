@@ -37,6 +37,7 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
+  Zap,
   Moon,
   Trash2,
   Wrench,
@@ -84,7 +85,8 @@ type LoaderId =
   | "legacyfabric"
   | "cleanroom"
   | "labymod"
-  | "liteloader";
+  | "liteloader"
+  | "horizon";
 type Icon = typeof Boxes;
 
 const resourceKinds: { id: ResourceKind; label: string; icon: Icon }[] = [
@@ -106,6 +108,7 @@ const loaderEntries: { id: LoaderId; label: string; icon: Icon; short: string }[
   { id: "cleanroom", label: "Cleanroom", icon: Brush, short: "1.12.2" },
   { id: "labymod", label: "LabyMod", icon: Monitor, short: "客户端" },
   { id: "liteloader", label: "LiteLoader", icon: Feather, short: "旧版" },
+  { id: "horizon", label: "Horizon", icon: Zap, short: "原生" },
 ];
 
 const loaderOptions = [
@@ -5004,6 +5007,13 @@ function CreateInstance({
         );
         return;
       }
+      if (loader === "horizon") {
+        await onCreated(instance);
+        onNotice(
+          "Horizon 实例已创建：首次点「启动」会自动下载 Horizon 客户端（约 59 MB）并准备 MC 26.3 资源，之后一键原生启动（无需 Java）。",
+        );
+        return;
+      }
       if (loader !== "vanilla") {
         setInstalling(true);
         onNotice(`正在下载并安装 ${version} 的 ${loader}，请稍候…`);
@@ -5048,7 +5058,11 @@ function CreateInstance({
           </label>
           <label className="field-label">
             Minecraft 版本
-            {releases.length ? (
+            {loader === "horizon" ? (
+              <select value="26.3" disabled>
+                <option value="26.3">26.3（Horizon 固定版本）</option>
+              </select>
+            ) : releases.length ? (
               <select value={version} onChange={(event) => setVersion(event.target.value)}>
                 {releases.map((item) => (
                   <option key={item.id} value={item.id}>
@@ -5062,7 +5076,14 @@ function CreateInstance({
           </label>
           <label className="field-label">
             加载器
-            <select value={loader} onChange={(event) => setLoader(event.target.value as LoaderId)}>
+            <select
+              value={loader}
+              onChange={(event) => {
+                const next = event.target.value as LoaderId;
+                setLoader(next);
+                if (next === "horizon") setVersion("26.3");
+              }}
+            >
               {loaderEntries.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.label}

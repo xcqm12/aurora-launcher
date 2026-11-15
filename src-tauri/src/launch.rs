@@ -197,11 +197,11 @@ struct AssetObject {
     size: u64,
 }
 
-struct DownloadItem {
-    url: String,
-    path: PathBuf,
-    sha1: Option<String>,
-    size: u64,
+pub(crate) struct DownloadItem {
+    pub(crate) url: String,
+    pub(crate) path: PathBuf,
+    pub(crate) sha1: Option<String>,
+    pub(crate) size: u64,
 }
 
 fn merge_child(mut parent: VersionJson, child: VersionJson) -> VersionJson {
@@ -313,7 +313,7 @@ fn rule_matches(rule: &Rule, features: &HashMap<String, bool>) -> bool {
     true
 }
 
-fn rules_allow(rules: &Option<Vec<Rule>>, features: &HashMap<String, bool>) -> bool {
+pub(crate) fn rules_allow(rules: &Option<Vec<Rule>>, features: &HashMap<String, bool>) -> bool {
     let Some(rules) = rules else {
         return true;
     };
@@ -403,7 +403,7 @@ fn maven_path(name: &str) -> Option<String> {
     Some(format!("{group}/{artifact}/{version}/{file}"))
 }
 
-fn library_artifact(library: &Library, classifier: Option<&str>) -> Option<Artifact> {
+pub(crate) fn library_artifact(library: &Library, classifier: Option<&str>) -> Option<Artifact> {
     if let Some(downloads) = &library.downloads {
         if let Some(classifier) = classifier {
             if let Some(artifact) = downloads
@@ -813,7 +813,7 @@ async fn download_one(
     ))
 }
 
-async fn download_all(
+pub(crate) async fn download_all(
     client: &reqwest::Client,
     items: Vec<DownloadItem>,
     source: &str,

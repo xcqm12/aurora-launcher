@@ -2,6 +2,7 @@ mod ai;
 mod auth;
 mod changelog;
 mod content;
+mod horizon;
 mod launch;
 mod loaders;
 mod music;
@@ -660,6 +661,7 @@ fn create_instance(
         "cleanroom",
         "labymod",
         "liteloader",
+        "horizon",
     ];
     if !allowed.contains(&loader.as_str()) {
         return Err("不支持的加载器类型".into());
@@ -2547,6 +2549,7 @@ struct LoaderCatalog {
 
 fn loader_label(id: &str) -> (&'static str, &'static str) {
     match id {
+        "horizon" => ("Horizon", "https://github.com/horizon-rust/horizon"),
         "fabric" => ("Fabric", "https://fabricmc.net/use/installer/"),
         "legacyfabric" => ("Legacy Fabric", "https://legacyfabric.net/"),
         "forge" => ("Forge", "https://files.minecraftforge.net/"),
@@ -2601,6 +2604,18 @@ async fn loader_versions(
     let source =
         crate::launch::resolve_download_source(&client, &read_settings(&app).download_source)
             .await;
+    if id == horizon::HORIZON_LOADER {
+        return Ok(LoaderCatalog {
+            id: id.clone(),
+            name: "Horizon".into(),
+            game_version: horizon::HORIZON_MC_VERSION.into(),
+            versions: vec![horizon::HORIZON_MC_VERSION.into()],
+            installer_url: None,
+            installer_template: None,
+            page: String::new(),
+            note: "Rust 原生客户端（无需 Java）；创建实例后直接启动，Aurora 自动完成安装与资源准备".into(),
+        });
+    }
     let (name, page) = loader_label(&id);
     let mut versions = Vec::new();
     let mut installer_url = None;
@@ -2910,6 +2925,70 @@ async fn launch_instance(
         .ok_or_else(|| "实例不存在".to_string())?;
     let settings = read_settings(&app);
     let account = auth::launch_account(&app).await?;
+    // Horizon（Rust 原生客户端）独立启动路径：无 JVM、无 AI 注入。
+    if instance.loader == horizon::HORIZON_LOADER {
+        let instance_dir = PathBuf::from(&instance.directory);
+        state.set_status(&instance_id, "preparing");
+        state.push_log(&instance_id, "[Aurora] 开始准备 Horizon 客户端");
+        let report_state = state.inner().clone();
+        let report_app = app.clone();
+        let report_id = instance_id.clone();
+        let report = move |message: &str| {
+            report_state.push_log(&report_id, message);
+            let _ = report_app.emit(
+                "game-log",
+                GameLogPayload {
+                    instance_id: report_id.clone(),
+                    line: message.to_string(),
+                },
+            );
+        };
+        let line_state = state.inner().clone();
+        let line_app = app.clone();
+        let line_id = instance_id.clone();
+        let on_line = Arc::new(move |line: String| {
+            line_state.push_log(&line_id, &line);
+            let _ = line_app.emit(
+                "game-log",
+                GameLogPayload {
+                    instance_id: line_id.clone(),
+                    line,
+                },
+            );
+        });
+        let exit_state = state.inner().clone();
+        let exit_app = app.clone();
+        let exit_id = instance_id.clone();
+        let on_exit = Arc::new(move |code: Option<i32>| {
+            exit_state.set_status(&exit_id, "exited");
+            if let Ok(mut pids) = exit_state.pids.lock() {
+                pids.remove(&exit_id);
+            }
+            let _ = exit_app.emit(
+                "game-exit",
+                GameExitPayload {
+                    instance_id: exit_id.clone(),
+                    code,
+                },
+            );
+        });
+        let pid = horizon::run(
+            &app,
+            &instance_id,
+            &instance_dir,
+            &account,
+            &settings,
+            &report,
+            on_line,
+            on_exit,
+        )
+        .await?;
+        if let Ok(mut pids) = state.pids.lock() {
+            pids.insert(instance_id.clone(), pid);
+        }
+        state.set_status(&instance_id, "running");
+        return Ok(pid.to_string());
+    }
     let mut ai_args: Vec<String> = Vec::new();
     if settings.ai_enabled {
         match ai::ensure_server(&app, &account.name) {

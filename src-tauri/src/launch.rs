@@ -1102,26 +1102,47 @@ fn build_classpath(client_jar: Option<&Path>, libraries: &[PathBuf]) -> String {
     entries.join(";")
 }
 
-/// 继承型版本 JSON（inheritsFrom，即 Forge/NeoForge/Fabric 安装器生成）
-/// 是否需要把原版 client jar 放上 classpath。
+/// 继承型版本 JSON（inheritsFrom，即各加载器安装器生成）是否需要把原版
+/// client jar 放上 classpath。分加载器处理：
 ///
-/// 答案是否：Forge 的 BootstrapLauncher 用 --ignoreList + 模块层自己装配
-/// 客户端（SRG 化 client 不在 libraries 里，由 installer 的 patch 体系在
-/// 运行时生成）；原版 jar 若在 classpath 上会被当作自动模块
-/// `_1._20._1`，与生成的 `minecraft` 模块导出同样的包，触发
-/// ResolutionException。原版（无 inheritsFrom）才需要显式放上 client jar。
+/// - Forge/NeoForge/Cleanroom：不放。BootstrapLauncher/modlauncher 用
+///   模块层自己装配客户端（SRG 化 client 不在 libraries 里，由 installer
+///   的 patch 体系在运行时生成）；原版 jar 若在 classpath 上会被它们
+///   提升为自动模块 `_1._20._1`，与生成的 `minecraft` 模块导出同样的包，
+///   触发 ResolutionException。这些启动器按 mainClass 特征识别。
+/// - Fabric/LegacyFabric（Knot）：必须放。Knot 没有自装配逻辑，游戏定位
+///   靠扫描 classpath 找原版 jar，缺了直接抛 “Minecraft game provider
+///   couldn't locate the game”。（v0.6.x 曾误把 Fabric 一并按 Forge 处理，
+///   导致所有 Fabric 实例启动崩溃。）
+/// - Launchwrapper 系（老 Forge ≤1.12、LiteLoader）与 OptiFine（原版
+///   mainClass + tweakClass）：也必须放，安装器生成的 JSON 不含原版 jar。
+/// - 原版（无 inheritsFrom）显式放上 client jar；未知继承型默认放——
+///   找不到游戏（couldn't locate the game）比模块冲突更致命。
 fn json_provides_client(version: &VersionJson) -> bool {
-    // 继承型一律不放原版 jar（BootstrapLauncher 自行装配客户端）。
-    if version.inherits_from.is_some() {
-        return false;
+    if version.inherits_from.is_none() {
+        // 原版 JSON 需要 client jar；防御：若其 libraries 已引用
+        // net.minecraft:client（未来格式变化），也不重复放。
+        return !version
+            .libraries
+            .iter()
+            .flatten()
+            .any(|library| library.name.starts_with("net.minecraft:client"));
     }
-    // 原版 JSON 需要 client jar；防御：若其 libraries 已引用
-    // net.minecraft:client（未来格式变化），也不重复放。
-    !version
-        .libraries
-        .iter()
-        .flatten()
-        .any(|library| library.name.starts_with("net.minecraft:client"))
+    // 继承型只有 forge 系自装配启动器不放原版 jar；Knot/Launchwrapper/
+    // OptiFine 等都依赖 classpath 上的原版 jar 才能定位游戏。
+    let main_class = version
+        .main_class
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    const SELF_ASSEMBLING: [&str; 5] = [
+        "net.minecraftforge",
+        "net.neoforged",
+        "cpw.mods.modlauncher",
+        "bootstraplauncher",
+        "cleanroom",
+    ];
+    !SELF_ASSEMBLING.iter().any(|marker| main_class.contains(marker))
 }
 
 fn authlib_args(authlib: Option<&crate::yggdrasil::LaunchAuthlib>) -> Vec<String> {
@@ -1886,25 +1907,56 @@ mod tests {
             libraries: Some(libs),
             ..Default::default()
         };
-        let inherited = |libs: Vec<Library>| VersionJson {
+        let inherited = |main_class: &str, libs: Vec<Library>| VersionJson {
             inherits_from: Some("1.20.1".into()),
+            main_class: Some(main_class.into()),
             libraries: Some(libs),
             ..Default::default()
         };
         // 原版 JSON：需要放原版 jar
         assert!(json_provides_client(&vanilla(vec![mk("com.google.code.gson:gson:2.10")])));
         assert!(json_provides_client(&vanilla(vec![])));
-        // Forge/NeoForge/Fabric（inheritsFrom）：BootstrapLauncher 自己装配
+        // Forge/NeoForge/Cleanroom：BootstrapLauncher/modlauncher 自己装配
         // 客户端，原版 jar 绝不能上 classpath（_1._20._1 模块冲突）。
-        assert!(!json_provides_client(&inherited(vec![
-            mk("net.minecraftforge:forge:1.20.1-47.4.28:universal"),
-        ])));
-        // Fabric 继承型即使列出 client library，也一视同仁不放原版 jar：
-        // 防止 _1._20._1 自动模块再次出现。
-        assert!(!json_provides_client(&inherited(vec![
-            mk("net.fabricmc:fabric-loader:0.16.0"),
-            mk("net.minecraft:client:1.20.1"),
-        ])));
+        assert!(!json_provides_client(&inherited(
+            "net.minecraftforge.bootstrap.BootstrapLauncher",
+            vec![mk("net.minecraftforge:forge:1.20.1-47.4.28:universal")],
+        )));
+        assert!(!json_provides_client(&inherited(
+            "cpw.mods.bootstraplauncher.BootstrapLauncher",
+            vec![],
+        )));
+        assert!(!json_provides_client(&inherited(
+            "cpw.mods.modlauncher.Launcher",
+            vec![],
+        )));
+        assert!(!json_provides_client(&inherited(
+            "com.cleanroommc.bootstrap.BootstrapLauncher",
+            vec![],
+        )));
+        // Fabric/LegacyFabric（Knot）：游戏定位器扫描 classpath 找原版 jar，
+        // 必须放（误当 Forge 处理会导致 couldn't locate the game）。
+        assert!(json_provides_client(&inherited(
+            "net.fabricmc.loader.impl.launch.knot.KnotClient",
+            vec![mk("net.fabricmc:fabric-loader:0.16.0")],
+        )));
+        assert!(json_provides_client(&inherited(
+            "net.fabricmc.loader.impl.launch.knot.KnotClient",
+            vec![
+                mk("net.fabricmc:fabric-loader:0.16.0"),
+                mk("net.minecraft:client:1.20.1"),
+            ],
+        )));
+        // 老 Forge/LiteLoader（Launchwrapper）与 OptiFine（原版 mainClass）
+        // 同样需要原版 jar。
+        assert!(json_provides_client(&inherited(
+            "net.minecraft.launchwrapper.Launch",
+            vec![mk("net.minecraftforge:forge:1.12.2-14.23.5.2859")],
+        )));
+        assert!(json_provides_client(&inherited(
+            "net.minecraft.client.main.Main",
+            vec![mk("optifine:OptiFine:HD_U_I6")],
+        )));
     }
 
     #[test]
@@ -1926,12 +1978,13 @@ mod tests {
         let child = VersionJson {
             id: "1.20.1-forge-47.4.28".into(),
             inherits_from: Some("1.20.1".into()),
+            main_class: Some("cpw.mods.bootstraplauncher.BootstrapLauncher".into()),
             libraries: Some(vec![mk("net.minecraftforge:forge:1.20.1-47.4.28:universal")]),
             ..Default::default()
         };
         // 真实启动路径是 load_version -> merge_child -> json_provides_client；
-        // 合并后必须仍被识别为继承型，否则原版 jar 会被放上 classpath，
-        // 重新触发 _1._20._1 模块冲突。
+        // 合并后必须保留继承标记与 forge 的 mainClass，否则原版 jar 会被
+        // 放上 classpath，重新触发 _1._20._1 模块冲突。
         let merged = merge_child(vanilla, child);
         assert_eq!(merged.inherits_from.as_deref(), Some("1.20.1"));
         assert!(!json_provides_client(&merged));

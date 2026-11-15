@@ -1,0 +1,31 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="MIT"
+issueTrackerURL="https://github.com/xcqm12/aurora-launcher/issues"
+
+[[mods]]
+modId="aurora_companion"
+version="${file.jarVersion}"
+displayName="Aurora Companion 小七"
+authors="Aurora"
+description='''
+Aurora 启动器的游戏内 AI 伙伴「小七」。
+
+安装后伙伴会随玩家进入世界、观察操作过程、陪你聊天（聊天框输入 #ai <问题>）；
+「自我意识」是角色扮演设定——小七不会真的替你操作游戏，只聊天、陪伴和提建议。
+需要由 Aurora 启动器启动游戏并开启 AI 伙伴（默认开启）。
+'''
+
+[[dependencies.aurora_companion]]
+    modId="forge"
+    mandatory=true
+    versionRange="[47,)"
+    ordering="NONE"
+    side="CLIENT"
+
+[[dependencies.aurora_companion]]
+    modId="minecraft"
+    mandatory=true
+    versionRange="[1.20.1,1.21)"
+    ordering="NONE"
+    side="CLIENT"

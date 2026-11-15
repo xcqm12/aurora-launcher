@@ -1,0 +1,16 @@
+pluginManagement {
+    repositories {
+        maven {
+            // Forge 插件主源
+            url = 'https://maven.minecraftforge.net'
+        }
+        maven {
+            // BMCLAPI 镜像 Forge maven（弱网/直连失败时兜底）
+            url = 'https://bmclapi2.bangbang93.com/maven'
+        }
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+rootProject.name = 'aurora-companion-forge'

@@ -81,11 +81,9 @@ pub fn ensure_server(app: &tauri::AppHandle, player: &str) -> Result<Vec<String>
             return Ok(jvm_args(runtime.port, &runtime.token, player));
         }
     }
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("绑定本地回环端口失败：{e}"))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| e.to_string())?
-        .port();
+    let listener =
+        TcpListener::bind("127.0.0.1:0").map_err(|e| format!("绑定本地回环端口失败：{e}"))?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let token = random_token();
     let stop = Arc::new(AtomicBool::new(false));
     let app_handle = app.clone();
@@ -128,13 +126,42 @@ mod tests {
         assert_eq!(args.len(), 3);
         for arg in &args {
             assert!(arg.starts_with("-Daurora.ai."), "{arg}");
-            let (_, value) = arg.split_once('=').unwrap_or_else(|| {
-                panic!("-D 参数必须带 = 值：{arg}")
-            });
+            let (_, value) = arg
+                .split_once('=')
+                .unwrap_or_else(|| panic!("-D 参数必须带 = 值：{arg}"));
             assert!(!value.is_empty());
         }
         assert_eq!(args[0], "-Daurora.ai.port=8123");
         assert_eq!(args[2], "-Daurora.ai.player=玩家");
+    }
+
+    #[test]
+    fn companion_package_follows_instance_loader_and_version() {
+        // Fabric 1.21.x → 现有 Fabric 包。
+        let fabric = pick_companion_package("fabric", "1.21.1").expect("fabric 1.21 应命中");
+        assert_eq!(fabric.loader, "fabric");
+        assert_eq!(fabric.filename, "aurora-companion-1.0.0.jar");
+        assert!(fabric.url.contains("v0.6.0"));
+        // Forge 1.20.1 → Forge 包（用户「我的新世界」实例场景）。
+        let forge = pick_companion_package("forge", "1.20.1").expect("forge 1.20.1 应命中");
+        assert_eq!(forge.loader, "forge");
+        assert_eq!(forge.filename, "aurora-companion-forge-1.20.1-1.0.0.jar");
+        assert!(forge.url.contains("v0.7.1"));
+        // Forge 1.20.1 子版本也命中。
+        assert!(pick_companion_package("forge", "1.20.1-47.4.28").is_some());
+        // 不支持组合返回 None。
+        assert!(pick_companion_package("forge", "1.21.1").is_none());
+        assert!(pick_companion_package("fabric", "1.20.1").is_none());
+        assert!(pick_companion_package("neoforge", "1.20.1").is_none());
+        // SHA256 占位不允许进入发布状态（构建完成后由真实哈希替换）。
+        for package in &COMPANION_PACKAGES {
+            assert_eq!(
+                package.sha256.len(),
+                64,
+                "{} 的 SHA256 应为 64 位十六进制",
+                package.note
+            );
+        }
     }
 }
 
@@ -245,18 +272,18 @@ fn handle_connection(
         .to_string();
 
     let (status, payload) = tauri::async_runtime::block_on(async {
-    match path.as_str() {
-        "/hello" => {
-            let mode = if parsed
-                .get("singleplayer")
-                .and_then(|item| item.as_bool())
-                .unwrap_or(false)
-            {
-                "单机"
-            } else {
-                "多人服务器"
-            };
-            let greeting = chat_reply(
+        match path.as_str() {
+            "/hello" => {
+                let mode = if parsed
+                    .get("singleplayer")
+                    .and_then(|item| item.as_bool())
+                    .unwrap_or(false)
+                {
+                    "单机"
+                } else {
+                    "多人服务器"
+                };
+                let greeting = chat_reply(
                 &app,
                 &player,
                 &format!(
@@ -265,24 +292,29 @@ fn handle_connection(
             )
             .await
             .unwrap_or_else(|error| format!("（小七在线，但有点迷糊：{error}）"));
-            (200, json!({ "greeting": greeting }))
-        }
-        "/observe" => {
-            let remark = handle_observe(&app, &player, &parsed).await;
-            (200, json!({ "remark": remark.unwrap_or_default() }))
-        }
-        "/chat" => {
-            let message = parsed
-                .get("message")
-                .and_then(|item| item.as_str())
-                .unwrap_or("")
-                .to_string();
-            let reply = chat_reply(&app, &player, &format!("玩家对你说：「{message}」。请回应。")).await
+                (200, json!({ "greeting": greeting }))
+            }
+            "/observe" => {
+                let remark = handle_observe(&app, &player, &parsed).await;
+                (200, json!({ "remark": remark.unwrap_or_default() }))
+            }
+            "/chat" => {
+                let message = parsed
+                    .get("message")
+                    .and_then(|item| item.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let reply = chat_reply(
+                    &app,
+                    &player,
+                    &format!("玩家对你说：「{message}」。请回应。"),
+                )
+                .await
                 .unwrap_or_else(|error| format!("（小七联系不上思绪：{error}）"));
-            (200, json!({ "reply": reply }))
+                (200, json!({ "reply": reply }))
+            }
+            _ => (404, json!({ "error": "not found" })),
         }
-        _ => (404, json!({ "error": "not found" })),
-    }
     });
     respond(&mut stream, status, &payload.to_string())
 }
@@ -435,7 +467,11 @@ fn chat_endpoint(base_url: &str) -> String {
     }
 }
 
-async fn chat_reply(app: &tauri::AppHandle, player: &str, instruction: &str) -> Result<String, String> {
+async fn chat_reply(
+    app: &tauri::AppHandle,
+    player: &str,
+    instruction: &str,
+) -> Result<String, String> {
     let settings = read_settings(app);
     let key = auth::unprotect(&settings.ai_key)?;
     if settings.ai_key.trim().is_empty() {
@@ -453,6 +489,8 @@ async fn chat_reply(app: &tauri::AppHandle, player: &str, instruction: &str) -> 
          性格活泼、有点小骄傲、喜欢吐槽但非常可靠；这是设定出来的人格，请始终以第一人称扮演。\
          规则：回复不超过三句话；不要代码块；不要列表；提供建议时具体、可执行；\
          Minecraft 知识渊博，会根据玩家最近的操作调整关心点。\
+         「自我意识」是角色扮演设定——你并不真的拥有意识，也永远不会代替玩家操作游戏，\
+         只观察、陪伴、聊天和提建议，操作决定权始终在玩家手里。\
          玩家最近操作记录：{recent}"
     );
     let client = crate::http_client(app)?;
@@ -495,10 +533,49 @@ async fn chat_reply(app: &tauri::AppHandle, player: &str, instruction: &str) -> 
         .unwrap_or_else(|| "（小七想了想，没找到合适的词）".to_string()))
 }
 
-const COMPANION_RELEASE: &str =
-    "https://github.com/xcqm12/aurora-launcher/releases/download/v0.6.0/aurora-companion-1.0.0.jar";
 const COMPANION_MAX_BYTES: u64 = 4 * 1024 * 1024;
-const COMPANION_SHA256: &str = "415a9ebcc4288d5204fd66ac7361613b74f5243f43d3fc70180ff87c13fd461f";
+
+/// Companion 模组发行包：按实例加载器/版本自动选择。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CompanionPackage {
+    pub loader: &'static str,
+    /// 实例 MC 版本前缀（如 "1.21"、"1.20.1"）。
+    pub version_prefix: &'static str,
+    pub url: &'static str,
+    pub sha256: &'static str,
+    /// 落盘到实例 mods/ 的文件名。
+    pub filename: &'static str,
+    pub note: &'static str,
+}
+
+const COMPANION_PACKAGES: [CompanionPackage; 2] = [
+    CompanionPackage {
+        loader: "fabric",
+        version_prefix: "1.21",
+        url: "https://github.com/xcqm12/aurora-launcher/releases/download/v0.6.0/aurora-companion-1.0.0.jar",
+        sha256: "415a9ebcc4288d5204fd66ac7361613b74f5243f43d3fc70180ff87c13fd461f",
+        filename: "aurora-companion-1.0.0.jar",
+        note: "Fabric 1.21.x",
+    },
+    CompanionPackage {
+        loader: "forge",
+        version_prefix: "1.20.1",
+        url: "https://github.com/xcqm12/aurora-launcher/releases/download/v0.7.1/aurora-companion-forge-1.20.1-1.0.0.jar",
+        sha256: "c5b62b08aa89a154c98e2633bfcf1ec1a88b8fe37d4c60252d28bbb38c4ed69b",
+        filename: "aurora-companion-forge-1.20.1-1.0.0.jar",
+        note: "Forge 1.20.1",
+    },
+];
+
+/// 按实例的加载器与 MC 版本挑选 Companion 发行包；找不到返回 None。
+pub(crate) fn pick_companion_package(
+    loader: &str,
+    minecraft_version: &str,
+) -> Option<&'static CompanionPackage> {
+    COMPANION_PACKAGES.iter().find(|package| {
+        loader == package.loader && minecraft_version.starts_with(package.version_prefix)
+    })
+}
 
 pub async fn install_companion(
     app: &tauri::AppHandle,
@@ -508,16 +585,20 @@ pub async fn install_companion(
         .into_iter()
         .find(|item| item.id == instance_id)
         .ok_or_else(|| "实例不存在".to_string())?;
-    if instance.loader != "fabric" {
-        return Err("AI 伙伴目前是 Fabric 模组：请先把实例加载器切换为 Fabric".into());
-    }
-    if !instance.minecraft_version.starts_with("1.21") {
-        return Err(format!(
-            "AI 伙伴适配 Minecraft 1.21.x，当前实例是 {}",
-            instance.minecraft_version
-        ));
-    }
-    let parsed = reqwest::Url::parse(COMPANION_RELEASE).map_err(|_| "下载地址无效".to_string())?;
+    let package = pick_companion_package(&instance.loader, &instance.minecraft_version)
+        .ok_or_else(|| {
+            format!(
+                "AI 伙伴当前适配 {}，当前实例是 {} {}",
+                COMPANION_PACKAGES
+                    .iter()
+                    .map(|p| p.note)
+                    .collect::<Vec<_>>()
+                    .join(" / "),
+                instance.loader,
+                instance.minecraft_version
+            )
+        })?;
+    let parsed = reqwest::Url::parse(package.url).map_err(|_| "下载地址无效".to_string())?;
     let host = parsed.host_str().unwrap_or_default();
     if parsed.scheme() != "https"
         || !(host == "github.com" || host == "objects.githubusercontent.com")
@@ -545,17 +626,16 @@ pub async fn install_companion(
         return Err("AI 伙伴模组不是有效的 JAR".into());
     }
     let actual = hex::encode(Sha256::digest(&bytes));
-    if actual != COMPANION_SHA256 {
+    if actual != package.sha256 {
         return Err("AI 伙伴模组 SHA-256 校验失败，已中止".into());
     }
-    let mods_dir = PathBuf::from(&instance.directory)
-        .join("game")
-        .join("mods");
+    let mods_dir = PathBuf::from(&instance.directory).join("game").join("mods");
     fs::create_dir_all(&mods_dir).map_err(|e| e.to_string())?;
-    let target = mods_dir.join("aurora-companion-1.0.0.jar");
+    let target = mods_dir.join(package.filename);
     crate::write_atomic(&target, &bytes)?;
     Ok(format!(
-        "已安装 AI 伙伴到 {}；启动游戏后它会自动出现",
+        "已安装 AI 伙伴（{}）到 {}；启动游戏后它会自动出现",
+        package.note,
         target.display()
     ))
 }

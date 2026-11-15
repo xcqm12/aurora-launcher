@@ -1,0 +1,63 @@
+buildscript {
+    repositories {
+        maven { url = 'https://maven.minecraftforge.net' }
+        maven { url = 'https://bmclapi2.bangbang93.com/maven' }
+        mavenCentral()
+    }
+    dependencies {
+        classpath group: 'net.minecraftforge.gradle', name: 'ForgeGradle', version: '[6.0,6.2)'
+    }
+}
+apply plugin: 'net.minecraftforge.gradle'
+
+version = mod_version
+group = group
+
+base {
+    archivesName = "${archives_base_name}-${minecraft_version}"
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+// 中文注释/字符串：源码与资源一律 UTF-8（Windows javac 默认 GBK）
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+processResources {
+    filteringCharset = 'UTF-8'
+}
+
+println "Java: ${System.getProperty 'java.version'}, JVM: ${System.getProperty 'java.vm.version'} (${System.getProperty 'java.vendor'})"
+
+minecraft {
+    // Forge 1.20.1 使用 Mojang 官方映射（与 Aurora Fabric 版同一套类名体系）
+    mappings channel: 'official', version: minecraft_version
+    copyIdeResources = true
+}
+
+sourceSets.main.resources { srcDir 'src/generated/resources' }
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+}
+
+jar {
+    manifest {
+        attributes([
+                'Specification-Title'   : mod_id,
+                'Specification-Vendor'  : 'Aurora',
+                'Specification-Version' : '1',
+                'Implementation-Title'  : project.name,
+                'Implementation-Version': project.jar.archiveVersion,
+                'Implementation-Vendor' : 'Aurora'
+        ])
+    }
+    finalizedBy 'reobfJar'
+}
+
+repositories {
+    maven { url = 'https://maven.minecraftforge.net' }
+    mavenCentral()
+    // BMCLAPI 兜底（对海外节点可能 403，放在官方源之后）
+    maven { url = 'https://bmclapi2.bangbang93.com/maven' }
+}

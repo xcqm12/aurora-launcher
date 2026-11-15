@@ -2,7 +2,13 @@
 
 Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游戏启动与加载器自动安装、微软正版/LittleSkin/离线登录、整合包导入导出、实例内容管理、镜像加速、EasyTier 联机。历史版本更新记录见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
-## 0.7.0 更新内容
+## 0.7.1 更新内容
+
+- **极光渐变签名**：薄荷→天蓝→紫渐变贯穿品牌徽标、导航高亮、主按钮与进度条，暗亮两主题共用。
+- **新增亮色主题**：深色 / 亮色 / 跟随系统三档可选，顶栏日 / 月按钮一键切换；全站彩色图标、樱花背景、音乐舱随主题自动适配。
+- **中文搜索模组**：Modrinth / CurseForge 支持中文关键词（自动路由 MCIM 翻译索引，回落官方）；CurseForge 中文搜索免 API Key。
+
+## 0.7.0 更新内容（历史）
 
 - **Rust 原生启动管线提速**：下载批次合一并行（索引先行，libraries 与数千资源不再串行等待）、并发提升（16/6）、每 URL 3 次退避重试、流式 SHA-1 校验 + 原子写、Java 探测缓存、natives 标记记录 client jar SHA-1；版本清单走镜像候选 + 重试。游戏本体仍由 Java 运行。
 - **JVM 优化预设**：G1GC（含 fml 证书修复）/ ZGC（JDK 15+）/ 不注入，可加「额外 JVM/游戏参数」；默认窗口尺寸与全屏设置。
@@ -235,7 +241,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.7.0>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.7.1>
 - 分发下载页：<http://mcdles.us.ci/>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）

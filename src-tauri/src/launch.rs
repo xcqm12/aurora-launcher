@@ -1166,6 +1166,13 @@ fn authlib_args(authlib: Option<&crate::yggdrasil::LaunchAuthlib>) -> Vec<String
 /// GC 优化预设（HMCL 社区长期验证的 MC 调优集合，含 fml 证书容忍
 /// flags，修复著名的老 Forge 警告）。ZGC 在 Windows 需 JDK 15+，
 /// 21+ 追加 ZGenerational，不满足时回退 G1。返回 None 表示不注入。
+/// 堆参数：-Xmx 按实例内存设置；-Xms = Xmx/2 夹在 512..2048，
+/// 固定初始堆减少启动期堆扩容（仅 native 管线 + JVM 优化开启时注入）。
+fn heap_args(memory_mb: u32) -> Vec<String> {
+    let heap = memory_mb.max(512);
+    vec![format!("-Xmx{heap}M"), format!("-Xms{}M", (heap / 2).clamp(512, 2048))]
+}
+
 pub(crate) fn gc_preset_args(gc: &str, java_major: u32) -> Option<Vec<String>> {
     let common: Vec<String> = vec![
         "-XX:-OmitStackTraceInFastThrow".into(),
@@ -1184,6 +1191,15 @@ pub(crate) fn gc_preset_args(gc: &str, java_major: u32) -> Option<Vec<String>> {
                 "-XX:G1NewSizePercent=20".into(),
                 "-XX:G1ReservePercent=20".into(),
                 "-XX:MaxGCPauseMillis=50".into(),
+                // 启动与内存调优：16M 大区减少 Forge 大对象跨区；引用并行
+                // 处理缩短 Full GC 触发时的停顿；字符串去重省内存；
+                // metaspace 预分配避免 Forge 巨量类加载反复扩容；禁用
+                // System.gc() 显式调用（模组启动期常触发拖慢）。
+                "-XX:G1HeapRegionSize=16M".into(),
+                "-XX:+ParallelRefProcEnabled".into(),
+                "-XX:+UseStringDeduplication".into(),
+                "-XX:MetaspaceSize=256M".into(),
+                "-XX:+DisableExplicitGC".into(),
             ];
             flags.extend(common);
             Some(flags)
@@ -1196,6 +1212,9 @@ pub(crate) fn gc_preset_args(gc: &str, java_major: u32) -> Option<Vec<String>> {
             if java_major >= 21 {
                 flags.push("-XX:+ZGenerational".into());
             }
+            // metaspace 预分配与 G1 同理；UseStringDeduplication 是 G1
+            // 特性，ZGC 下不注入。
+            flags.push("-XX:MetaspaceSize=256M".into());
             flags.extend(common);
             Some(flags)
         }
@@ -1650,8 +1669,11 @@ pub async fn prepare(
         for arg in ctx.extra_jvm_args.split_whitespace() {
             args.push(arg.to_string());
         }
+        // 固定初始堆：启动期省去多次堆扩容与伴随 GC（详见 heap_args）。
+        args.extend(heap_args(ctx.memory_mb));
+    } else {
+        args.push(format!("-Xmx{}M", ctx.memory_mb.max(512)));
     }
-    args.push(format!("-Xmx{}M", ctx.memory_mb.max(512)));
     args.push(
         version
             .main_class
@@ -1796,12 +1818,25 @@ mod tests {
             .position(|arg| arg.starts_with("-XX:G1NewSizePercent"))
             .unwrap();
         assert!(unlock < experimental);
+        // 内存与启动调优 flags（G1）。
+        for flag in [
+            "-XX:G1HeapRegionSize=16M",
+            "-XX:+ParallelRefProcEnabled",
+            "-XX:+UseStringDeduplication",
+            "-XX:MetaspaceSize=256M",
+            "-XX:+DisableExplicitGC",
+        ] {
+            assert!(g1.contains(&flag.to_string()), "G1 预设缺少 {flag}");
+        }
         // off：不注入。
         assert!(gc_preset_args("off", 21).is_none());
         // zgc：21+ 带 ZGenerational；老 JVM（Java 8）回退 G1。
         let zgc21 = gc_preset_args("zgc", 21).unwrap();
         assert!(zgc21.contains(&"-XX:+UseZGC".to_string()));
         assert!(zgc21.contains(&"-XX:+ZGenerational".to_string()));
+        // ZGC 只加 metaspace 预分配，无 G1 专属 flags。
+        assert!(zgc21.contains(&"-XX:MetaspaceSize=256M".to_string()));
+        assert!(!zgc21.contains(&"-XX:+UseStringDeduplication".to_string()));
         let zgc17 = gc_preset_args("zgc", 17).unwrap();
         assert!(zgc17.contains(&"-XX:+UseZGC".to_string()));
         assert!(!zgc17.contains(&"-XX:+ZGenerational".to_string()));
@@ -1809,6 +1844,17 @@ mod tests {
             gc_preset_args("zgc", 8).unwrap(),
             gc_preset_args("g1", 8).unwrap()
         );
+    }
+
+    #[test]
+    fn heap_args_scale_with_memory_setting() {
+        // -Xms = Xmx/2，夹在 512..2048：默认 4096 → Xms 2048；小内存
+        // 1024 → Xms 512；上限 32768 → Xms 2048。
+        let args = heap_args(4096);
+        assert_eq!(args, vec!["-Xmx4096M".to_string(), "-Xms2048M".to_string()]);
+        assert_eq!(heap_args(1024), vec!["-Xmx1024M".to_string(), "-Xms512M".to_string()]);
+        assert_eq!(heap_args(32768), vec!["-Xmx32768M".to_string(), "-Xms2048M".to_string()]);
+        assert_eq!(heap_args(512), vec!["-Xmx512M".to_string(), "-Xms512M".to_string()]);
     }
 
     #[test]

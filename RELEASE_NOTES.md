@@ -1,4 +1,10 @@
-# Aurora Launcher v0.7.1.1
+# Aurora Launcher v0.7.1.2
+
+- **JVM 优化预设扩充（启动速度与内存）**：G1 预设新增 16M 大区域（减少 Forge 大对象跨区）、引用并行处理（缩短 GC 停顿）、字符串去重（降内存）、Metaspace 预分配 256M（Forge 巨量类加载不再反复扩容——启动提速实测大头）、禁用显式 System.gc()（模组启动期常触发拖慢）；ZGC 预设同步预分配 Metaspace。
+- **固定初始堆**：新增 `-Xms = Xmx/2`（夹在 512M..2048M），启动期省去多次堆扩容与伴随 GC，小内存机器不至于开局占满。
+- 以上随「JVM 优化预设」开关生效（设置 → 启动与性能），兼容模式行为不变；已在真实 JVM 冒烟验证全部参数有效。
+
+# Aurora Launcher v0.7.1.1（历史）
 
 - **修复：Fabric / Legacy Fabric 实例启动崩溃**——继承型版本 JSON 被误按 Forge 处理，Knot 启动器靠扫描 classpath 定位游戏，缺原版 jar 直接抛 "Minecraft game provider couldn't locate the game"。现按 mainClass 特征识别启动器家族：Fabric/LegacyFabric 必须放原版 jar；Forge/NeoForge/Cleanroom 仍然不放（模块冲突）；老 Forge/LiteLoader（Launchwrapper）与 OptiFine 同样必须放。
 - **AI 伙伴支持 Forge 1.20.1**：伙伴模组新增 Forge 版（「小七」功能与 Fabric 版一致——跟随玩家、观察操作、#ai 聊天），安装器按实例加载器与版本自动选择 Fabric / Forge 发行包（SHA-256 校验）。「自我意识」是角色扮演设定，伙伴不会替你操作游戏。

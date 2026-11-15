@@ -1,4 +1,9 @@
-# Aurora Launcher v0.7.1
+# Aurora Launcher v0.7.1.1
+
+- **修复：Fabric / Legacy Fabric 实例启动崩溃**——继承型版本 JSON 被误按 Forge 处理，Knot 启动器靠扫描 classpath 定位游戏，缺原版 jar 直接抛 "Minecraft game provider couldn't locate the game"。现按 mainClass 特征识别启动器家族：Fabric/LegacyFabric 必须放原版 jar；Forge/NeoForge/Cleanroom 仍然不放（模块冲突）；老 Forge/LiteLoader（Launchwrapper）与 OptiFine 同样必须放。
+- **AI 伙伴支持 Forge 1.20.1**：伙伴模组新增 Forge 版（「小七」功能与 Fabric 版一致——跟随玩家、观察操作、#ai 聊天），安装器按实例加载器与版本自动选择 Fabric / Forge 发行包（SHA-256 校验）。「自我意识」是角色扮演设定，伙伴不会替你操作游戏。
+
+# Aurora Launcher v0.7.1（历史）
 
 - **极光渐变签名**：薄荷 → 天蓝 → 紫的极光渐变贯穿全局——品牌徽标、品牌字、侧边栏激活指示条、主按钮、下载进度条、页眉圆点，暗亮两主题共用同一套品牌色，一眼可辨。
 - **新增亮色主题**：设置 → 外观可选 深色（默认）/ 亮色 / 跟随系统（监听 Windows 深浅色自动切换）；顶栏新增日 / 月按钮一键切换。全站样式重构为 token 体系（~185 处硬编码色归一化），彩色分类图标、樱花背景、音乐舱频谱与唱盘均随主题自动适配。

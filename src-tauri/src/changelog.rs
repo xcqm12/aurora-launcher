@@ -92,8 +92,15 @@ fn parse_notes(text: &str, current: &str) -> Vec<ChangelogEntry> {
             }
         }
     }
+    // 版本号规则：小版本以四段 tag 递增（如 0.7.1.1），package 版本号
+    // 保持三段不变——当前版本判定用前缀匹配兼容四段小版本，且只标最
+    // 新的一条（0.7.1 历史段精确相等也不重复高亮）。
+    let mut current_marked = false;
     for entry in &mut entries {
-        entry.current = entry.version == current;
+        let matches =
+            entry.version == current || entry.version.starts_with(&format!("{current}."));
+        entry.current = matches && !current_marked;
+        current_marked |= entry.current;
     }
     entries.truncate(MAX_VERSIONS);
     entries
@@ -125,6 +132,26 @@ mod tests {
         assert!(entries[0].items[0].contains("· 存档"));
         assert_eq!(entries[1].version, "0.6.0");
         assert!(entries[1].history);
+        assert!(!entries[1].current);
+    }
+
+    #[test]
+    fn four_segment_minor_tags_mark_current() {
+        // 版本号规则：小版本以 0.7.1.1 这样的四段 tag 递增，package 版本
+        // 号保持 0.7.1——四段条目应被识别为当前版本。
+        let entries = parse_notes(
+            "# Aurora Launcher v0.7.1.1
+
+- 修复 Fabric 实例启动。
+
+# Aurora Launcher v0.7.1（历史）
+
+- 上一版。
+",
+            "0.7.1",
+        );
+        assert_eq!(entries[0].version, "0.7.1.1");
+        assert!(entries[0].current);
         assert!(!entries[1].current);
     }
 

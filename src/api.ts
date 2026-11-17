@@ -249,6 +249,32 @@ export type ConfigFile = { path: string; content: string };
 export type MusicTrack = { file: string; name: string; size: number };
 export type MusicChunk = { data: string; offset: number; total: number };
 
+export type LyricsResult = {
+  lrc: string;
+  /** embedded | lrclib | netease | none */
+  source: string;
+  /** 是否带时间戳（可随播放滚动） */
+  synced: boolean;
+};
+
+export type PlaylistTrack = { name: string; artist: string; duration_sec: number };
+export type RemotePlaylist = {
+  /** netease | qq */
+  platform: string;
+  name: string;
+  cover: string;
+  tracks: PlaylistTrack[];
+};
+export type SavedPlaylist = {
+  id: string;
+  platform: string;
+  name: string;
+  cover: string;
+  source_url: string;
+  created_at: number;
+  tracks: PlaylistTrack[];
+};
+
 export type ChangelogEntry = {
   version: string;
   current: boolean;
@@ -421,4 +447,11 @@ export const api = {
   musicRead: (file: string, offset: number) =>
     invoke<MusicChunk>("music_read", { file, offset }),
   musicDelete: (file: string) => invoke<void>("music_delete", { file }),
+  musicLyrics: (file: string, duration: number) =>
+    invoke<LyricsResult>("music_lyrics", { file, duration }),
+  playlistFetch: (url: string) => invoke<RemotePlaylist>("music_playlist_fetch", { url }),
+  playlistSave: (playlist: RemotePlaylist, sourceUrl: string) =>
+    invoke<SavedPlaylist>("music_playlist_save", { playlist, sourceUrl }),
+  playlistsList: () => invoke<SavedPlaylist[]>("music_playlists_list"),
+  playlistDelete: (id: string) => invoke<void>("music_playlist_delete", { id }),
 };

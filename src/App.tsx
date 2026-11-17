@@ -50,6 +50,9 @@ import {
   AppSettings,
   Changelog,
   MusicTrack,
+  LyricsResult,
+  RemotePlaylist,
+  SavedPlaylist,
   ChangelogEntry,
   ConfigEntry,
   ContentItem,
@@ -4439,6 +4442,30 @@ const AUDIO_MIME: Record<string, string> = {
   aac: "audio/aac",
 };
 
+/* LRC 解析：多时间戳行展开成多条；无时间戳的行 t=-2（纯文本整段展示，不参与滚动高亮） */
+function parseLrc(text: string): { t: number; text: string }[] {
+  const out: { t: number; text: string }[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const stamps = [...raw.matchAll(/\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g)];
+    const body = raw.replace(/\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g, "").trim();
+    if (stamps.length) {
+      for (const m of stamps) {
+        const frac = m[3] ? Number(m[3].padEnd(3, "0")) / 1000 : 0;
+        out.push({ t: Number(m[1]) * 60 + Number(m[2]) + frac, text: body });
+      }
+    } else if (body) {
+      out.push({ t: -2, text: body });
+    }
+  }
+  out.sort((a, b) => a.t - b.t);
+  return out;
+}
+
+/* 曲名规范化（本地匹配）：去空白、小写、去扩展名 */
+function normTrackName(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, "").replace(/\.(mp3|flac|ogg|wav|m4a|aac|opus)$/i, "");
+}
+
 function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
   const [tracks, setTracks] = useState<MusicTrack[]>([]);
   const [cur, setCur] = useState(-1);
@@ -4447,8 +4474,21 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
   const [pos, setPos] = useState({ cur: 0, end: 0 });
   const [loading, setLoading] = useState(false);
   const [vol, setVol] = useState(80);
+  /* 歌词：结果 + 解析行 + 当前行索引 */
+  const [lyr, setLyr] = useState<LyricsResult | null>(null);
+  const [lyrLines, setLyrLines] = useState<{ t: number; text: string }[]>([]);
+  const [lyrIdx, setLyrIdx] = useState(-1);
+  const [lyrLoading, setLyrLoading] = useState(false);
+  const lyrRetryRef = useRef("");
+  /* 其他平台歌单：链接输入 / 抓取预览 / 收藏列表 / 展开的收藏卡 */
+  const [plUrl, setPlUrl] = useState("");
+  const [plBusy, setPlBusy] = useState(false);
+  const [plPreview, setPlPreview] = useState<RemotePlaylist | null>(null);
+  const [savedPl, setSavedPl] = useState<SavedPlaylist[]>([]);
+  const [plOpenId, setPlOpenId] = useState("");
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const curLineRef = useRef<HTMLDivElement | null>(null);
   const urlRef = useRef("");
   const ctxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -4483,6 +4523,20 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
         if (!audio) return;
         setCur(index);
         setTitle(tr.name);
+        // 歌词与音频并行获取：先不带时长查一遍，拿到时长后（见下方 effect）重试一次。
+        setLyr(null);
+        setLyrLines([]);
+        setLyrIdx(-1);
+        lyrRetryRef.current = "";
+        setLyrLoading(true);
+        api
+          .musicLyrics(tr.file, 0)
+          .then((r) => {
+            setLyr(r);
+            setLyrLines(r.lrc ? parseLrc(r.lrc) : []);
+          })
+          .catch(() => setLyr(null))
+          .finally(() => setLyrLoading(false));
         // 换 src 后等 canplay 再 play：立即 play 会因 readyState=0 被
         // 静默 stall（自动播放下一首失效的根因）。
         audio.src = urlRef.current;
@@ -4551,6 +4605,100 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
       onNotice(String(error));
     }
   };
+
+  /* 其他平台歌单：抓取 / 收藏 / 删除 */
+  const refreshPlaylists = useCallback(async () => {
+    try {
+      setSavedPl(await api.playlistsList());
+    } catch (error) {
+      onNotice(String(error));
+    }
+  }, [onNotice]);
+
+  useEffect(() => {
+    void refreshPlaylists();
+  }, [refreshPlaylists]);
+
+  const fetchPlaylist = async () => {
+    if (!plUrl.trim() || plBusy) return;
+    setPlBusy(true);
+    try {
+      const p = await api.playlistFetch(plUrl);
+      setPlPreview(p);
+      onNotice(`已获取歌单「${p.name}」共 ${p.tracks.length} 首`);
+    } catch (error) {
+      onNotice(String(error));
+    } finally {
+      setPlBusy(false);
+    }
+  };
+
+  const savePlaylist = async () => {
+    if (!plPreview) return;
+    try {
+      await api.playlistSave(plPreview, plUrl);
+      await refreshPlaylists();
+      onNotice(`已收藏歌单「${plPreview.name}」`);
+    } catch (error) {
+      onNotice(String(error));
+    }
+  };
+
+  const removePlaylist = async (id: string) => {
+    try {
+      await api.playlistDelete(id);
+      if (plOpenId === id) setPlOpenId("");
+      await refreshPlaylists();
+    } catch (error) {
+      onNotice(String(error));
+    }
+  };
+
+  /* 本地曲库匹配：精确 → 互相包含（Live / Remix 括注差异） */
+  const findLocalMatch = (name: string): number => {
+    const n = normTrackName(name);
+    if (!n) return -1;
+    const exact = tracks.findIndex((t) => normTrackName(t.name) === n);
+    if (exact >= 0) return exact;
+    return tracks.findIndex((t) => {
+      const tn = normTrackName(t.name);
+      return tn.length > 0 && (tn.includes(n) || n.includes(tn));
+    });
+  };
+
+  /* 拿到音频时长后，若首轮没找到歌词，带时长重试一次（提高 LRCLIB 匹配率） */
+  useEffect(() => {
+    if (!lyr || lyr.source !== "none" || lyrLoading || pos.end <= 1) return;
+    const tr = tracks[cur];
+    if (!tr || lyrRetryRef.current === tr.file) return;
+    lyrRetryRef.current = tr.file;
+    setLyrLoading(true);
+    api
+      .musicLyrics(tr.file, pos.end)
+      .then((r) => {
+        setLyr(r);
+        setLyrLines(r.lrc ? parseLrc(r.lrc) : []);
+      })
+      .catch(() => setLyr(null))
+      .finally(() => setLyrLoading(false));
+  }, [pos.end, lyr, lyrLoading, tracks, cur]);
+
+  /* 同步歌词：随播放进度滚动高亮 */
+  useEffect(() => {
+    if (!lyr?.synced || !lyrLines.length) return;
+    let idx = -1;
+    for (let i = 0; i < lyrLines.length; i++) {
+      if (lyrLines[i].t <= pos.cur) idx = i;
+      else break;
+    }
+    setLyrIdx(idx);
+  }, [pos.cur, lyr, lyrLines]);
+
+  useEffect(() => {
+    if (lyrIdx >= 0 && curLineRef.current) {
+      curLineRef.current.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [lyrIdx]);
 
   const toggle = () => {
     const audio = audioRef.current;
@@ -4783,6 +4931,35 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
               />
             </div>
           </div>
+          <div className="lyrics-wrap">
+            <div className="panel-h sub">
+              <span className="led" />
+              LYRICS{lyr && lyr.source !== "none" ? ` · ${lyr.source.toUpperCase()}` : ""}
+            </div>
+            {lyrLoading ? (
+              <div className="lyrics">
+                <div className="lyric-line cur">正在获取歌词…</div>
+              </div>
+            ) : lyr && lyr.lrc ? (
+              <div className="lyrics">
+                {lyrLines.map((ln, i) => (
+                  <div
+                    key={i}
+                    ref={lyr.synced && i === lyrIdx ? curLineRef : undefined}
+                    className={`lyric-line ${lyr.synced && i === lyrIdx ? "cur" : ""} ${lyr.synced ? "" : "plain"}`}
+                  >
+                    {ln.text || "♪ ♪ ♪"}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="lyrics">
+                <div className="lyric-hint">
+                  未找到歌词 · 自动匹配顺序：文件内嵌 → LRCLIB → 网易云
+                </div>
+              </div>
+            )}
+          </div>
           <audio ref={audioRef} hidden />
         </div>
 
@@ -4824,6 +5001,144 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
             音乐文件复制到数据目录 <code>music/</code> 下，仅在本机播放，不上传；上限 2000 首、单首 200 MB。
           </p>
         </div>
+      </div>
+
+      <div className="music-panel span-2">
+        <div className="panel-h">
+          <span className="led" />
+          PLAYLIST LINK · 其他平台歌单
+        </div>
+        <div className="pl-import">
+          <input
+            className="content-search"
+            value={plUrl}
+            onChange={(event) => setPlUrl(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void fetchPlaylist();
+            }}
+            placeholder="粘贴网易云音乐 / QQ 音乐分享链接或口令文本（支持短链），回车获取"
+            spellCheck={false}
+          />
+          <button
+            className="primary-button"
+            onClick={() => void fetchPlaylist()}
+            disabled={plBusy || !plUrl.trim()}
+          >
+            {plBusy ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />} 获取歌单
+          </button>
+        </div>
+        {plPreview && (
+          <div className="pl-card">
+            <div className="pl-head">
+              {plPreview.cover ? (
+                <img className="pl-cover" src={plPreview.cover} alt="" />
+              ) : (
+                <div className="pl-cover ph">♫</div>
+              )}
+              <div className="pl-meta">
+                <div className="pl-name">{plPreview.name}</div>
+                <div className="pl-sub">
+                  {plPreview.platform === "qq" ? "QQ 音乐" : "网易云音乐"} · {plPreview.tracks.length} 首 ·
+                  本地已匹配 {plPreview.tracks.filter((t) => findLocalMatch(t.name) >= 0).length} 首
+                </div>
+              </div>
+              <button className="ghost-button" onClick={() => void savePlaylist()}>
+                <Plus size={14} /> 收藏歌单
+              </button>
+              <button className="ghost-button" onClick={() => setPlPreview(null)} title="关闭预览">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="pl-tracks">
+              {plPreview.tracks.map((t, i) => {
+                const local = findLocalMatch(t.name);
+                return (
+                  <div
+                    key={`${t.name}-${i}`}
+                    className={`pl-row ${local >= 0 ? "hit" : "miss"}`}
+                    onClick={() => {
+                      if (local >= 0) void loadTrack(local);
+                    }}
+                    title={local >= 0 ? "点击播放本地文件" : "曲库中还没有这首歌"}
+                  >
+                    <span className="track-no">{String(i + 1).padStart(2, "0")}</span>
+                    <span className="track-name">{t.name}</span>
+                    <span className="pl-artist">{t.artist}</span>
+                    <span className="track-size">{fmt(t.duration_sec)}</span>
+                    {local >= 0 ? (
+                      <span className="pl-badge ok"><Check size={12} /> 本地</span>
+                    ) : (
+                      <span className="pl-badge miss"><X size={12} /> 缺歌</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {savedPl.length > 0 && (
+          <div className="pl-saved">
+            {savedPl.map((p) => (
+              <div key={p.id} className="pl-card">
+                <div className="pl-head">
+                  {p.cover ? (
+                    <img className="pl-cover" src={p.cover} alt="" />
+                  ) : (
+                    <div className="pl-cover ph">♫</div>
+                  )}
+                  <div className="pl-meta">
+                    <div className="pl-name">{p.name}</div>
+                    <div className="pl-sub">
+                      {p.platform === "qq" ? "QQ 音乐" : "网易云音乐"} · {p.tracks.length} 首 ·{" "}
+                      {new Date(p.created_at * 1000).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <button className="ghost-button" onClick={() => setPlOpenId(plOpenId === p.id ? "" : p.id)}>
+                    {plOpenId === p.id ? "收起" : "曲目"}
+                  </button>
+                  <button
+                    className="track-rm show"
+                    title="删除歌单"
+                    onClick={() => void removePlaylist(p.id)}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+                {plOpenId === p.id && (
+                  <div className="pl-tracks">
+                    {p.tracks.map((t, i) => {
+                      const local = findLocalMatch(t.name);
+                      return (
+                        <div
+                          key={`${t.name}-${i}`}
+                          className={`pl-row ${local >= 0 ? "hit" : "miss"}`}
+                          onClick={() => {
+                            if (local >= 0) void loadTrack(local);
+                          }}
+                          title={local >= 0 ? "点击播放本地文件" : "曲库中还没有这首歌"}
+                        >
+                          <span className="track-no">{String(i + 1).padStart(2, "0")}</span>
+                          <span className="track-name">{t.name}</span>
+                          <span className="pl-artist">{t.artist}</span>
+                          <span className="track-size">{fmt(t.duration_sec)}</span>
+                          {local >= 0 ? (
+                            <span className="pl-badge ok"><Check size={12} /></span>
+                          ) : (
+                            <span className="pl-badge miss"><X size={12} /></span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="security-note">
+          歌单只保存曲目元数据（歌名 / 歌手 / 时长）到本机 <code>music/playlists.json</code>，不抓取音频流；支持网易云音乐与 QQ
+          音乐分享链接（含短链）。点已匹配曲目可直接播放本地文件。
+        </p>
       </div>
     </div>
   );

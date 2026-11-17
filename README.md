@@ -2,7 +2,12 @@
 
 Windows 优先的 Minecraft 启动器，Rust + Tauri 2 + React 19：真正的游戏启动与加载器自动安装、微软正版/LittleSkin/离线登录、整合包导入导出、实例内容管理、镜像加速、EasyTier 联机。历史版本更新记录见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
-## 0.7.1 更新内容
+## 0.7.1.3 更新内容
+
+- **自动获取歌词**：音乐舱播放时自动匹配歌词（内嵌标签 → LRCLIB → 网易云），带时间戳的 LRC 随播放滚动高亮当前行，结果缓存到本机 `music/lyrics/`。
+- **其他平台歌单导入**：粘贴网易云 / QQ 音乐分享链接或口令文本（支持短链）抓取曲目清单，与本地曲库自动匹配——已导入点选即播，缺歌一目了然；可收藏歌单（仅存元数据，上限 50 个）。
+
+## 0.7.1 更新内容（历史）
 
 - **极光渐变签名**：薄荷→天蓝→紫渐变贯穿品牌徽标、导航高亮、主按钮与进度条，暗亮两主题共用。
 - **新增亮色主题**：深色 / 亮色 / 跟随系统三档可选，顶栏日 / 月按钮一键切换；全站彩色图标、樱花背景、音乐舱随主题自动适配。
@@ -241,7 +246,7 @@ CI 会构建 standard 与 cn-restricted、可选签名、生成 SHA256SUMS 并�
 ## 发布
 
 - 仓库：<https://github.com/xcqm12/aurora-launcher>
-- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.7.1>
+- 最新 Release：<https://github.com/xcqm12/aurora-launcher/releases/tag/v0.7.1.3>
 - 分发下载页：<http://mcdles.us.ci/>
 
 ## 微软登录（对齐 PCL2 / HMCL / lmaml 教程）

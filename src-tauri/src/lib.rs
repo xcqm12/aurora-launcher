@@ -4,9 +4,11 @@ mod changelog;
 mod content;
 mod launch;
 mod loaders;
+mod lyrics;
 mod music;
 mod multiplayer;
 mod packs;
+mod playlists;
 mod yggdrasil;
 
 use base64::Engine;
@@ -3648,6 +3650,11 @@ pub fn run() {
             music::music_list,
             music::music_read,
             music::music_delete,
+            lyrics::music_lyrics,
+            playlists::music_playlist_fetch,
+            playlists::music_playlist_save,
+            playlists::music_playlists_list,
+            playlists::music_playlist_delete,
             changelog::app_changelog
         ])
         .run(tauri::generate_context!())

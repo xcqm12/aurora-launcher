@@ -31,7 +31,7 @@ pub(crate) struct MusicChunk {
     total: u64,
 }
 
-fn music_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn music_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = data_dir(app)?.join("music");
     fs::create_dir_all(&dir).map_err(|e| format!("无法创建音乐目录：{e}"))?;
     Ok(dir)
@@ -91,7 +91,7 @@ fn safe_track_name(raw: &str) -> String {
 
 /// 曲库文件名校验：单个路径组件、无分隔符/控制字符，且做 file_name
 /// 回环检查（防御 ".."、结尾点等被文件系统归一化的名字）。
-fn is_safe_track_file(name: &str) -> bool {
+pub(crate) fn is_safe_track_file(name: &str) -> bool {
     !name.is_empty()
         && !name.chars().any(|c| c.is_control())
         && PathBuf::from(name)

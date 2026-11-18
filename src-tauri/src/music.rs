@@ -256,6 +256,26 @@ pub(crate) fn pick_music_files() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// 清空曲库：删除 music/ 下全部音频文件（歌词缓存与歌单收藏保留，同名曲目
+/// 重新导入后歌词缓存键失效与否取决于文件大小，命中即复用）。
+#[tauri::command]
+pub(crate) fn music_clear(app: tauri::AppHandle) -> Result<usize, String> {
+    let dir = music_dir(&app)?;
+    let mut removed = 0usize;
+    let entries = fs::read_dir(&dir).map_err(|e| format!("读取音乐目录失败：{e}"))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if is_audio_name(&name) && fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2287,7 +2287,7 @@ button:disabled {
 .track-row.cur .track-no{color:var(--accent)}
 .track-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
 .track-size{font-family:var(--mono);font-size:10px;color:var(--muted);flex-shrink:0}
-.track-rm{opacity:0;border:0;background:none;color:var(--muted);cursor:pointer;padding:2px;transition:.15s}
+.track-rm{opacity:.45;border:0;background:none;color:var(--muted);cursor:pointer;padding:2px;transition:.15s}
 .track-row:hover .track-rm{opacity:.85}
 .track-rm:hover{color:#f08c9b}
 
@@ -2903,3 +2903,9 @@ button:disabled {
 :root[data-theme="light"] .pl-head .track-rm:hover {
   color: #c94b66;
 }
+
+/* 音乐舱：清空曲库两段式确认 + 标题区多按钮排布 */
+.section-heading .heading-actions{display:flex;gap:10px;flex-shrink:0}
+.ghost-button.danger-flash{border-color:rgba(240,140,155,.6);color:#f08c9b;animation:clearPulse 1s infinite}
+@keyframes clearPulse{0%,100%{box-shadow:0 0 0 rgba(240,140,155,.0)}50%{box-shadow:0 0 14px rgba(240,140,155,.35)}}
+:root[data-theme="light"] .ghost-button.danger-flash{color:#c94b66;border-color:rgba(201,75,102,.6)}

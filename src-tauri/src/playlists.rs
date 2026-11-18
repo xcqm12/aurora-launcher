@@ -69,12 +69,27 @@ fn save_playlists(app: &tauri::AppHandle, list: &[SavedPlaylist]) -> Result<(), 
 }
 
 /// 从整段分享文本里抠出第一条 http(s) 链接（中文口令常用「」《》等括号包住）。
+/// 先做全角→半角归一化（中文输入法把 https：// 打成全角是常见坑），并剔除零宽字符。
 fn extract_url(input: &str) -> String {
-    let pos = match input.find("https://").or_else(|| input.find("http://")) {
+    let normalized: String = input
+        .chars()
+        .filter_map(|c| match c {
+            '：' => Some(':'),
+            '／' => Some('/'),
+            '？' => Some('?'),
+            '＆' => Some('&'),
+            '＝' => Some('='),
+            '％' => Some('%'),
+            '＃' => Some('#'),
+            '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{feff}' => None,
+            _ => Some(c),
+        })
+        .collect();
+    let pos = match normalized.find("https://").or_else(|| normalized.find("http://")) {
         None => return String::new(),
         Some(p) => p,
     };
-    let rest = &input[pos..];
+    let rest = &normalized[pos..];
     let end = rest
         .find(|c: char| {
             c.is_whitespace()
@@ -88,51 +103,106 @@ fn extract_url(input: &str) -> String {
     rest[..end].to_string()
 }
 
-/// 取查询参数 id：先看常规 query，再看 SPA 风格片段（music.163.com/#/playlist?id=…）。
-fn query_id(url: &reqwest::Url) -> String {
+/// 链接指向的资源类型。
+#[derive(Debug, PartialEq)]
+enum LinkKind {
+    /// 歌单（id 为数字）。
+    Playlist(String),
+    /// 单曲（netease 数字 id / qq songmid 字母数字）。
+    Song(String),
+    /// 识别到平台但没抠到 id。
+    NoId,
+    /// 不是已支持的平台。
+    Unknown,
+}
+
+/// 平台中文名（错误提示用）。
+fn platform_label(platform: &str) -> &'static str {
+    match platform {
+        "netease" => "网易云音乐",
+        "qq" => "QQ 音乐",
+        _ => "未知平台",
+    }
+}
+
+/// 查询参数（含 SPA 片段 query）取值。
+fn query_value(url: &reqwest::Url, key: &str) -> Option<String> {
     for (k, v) in url.query_pairs() {
-        if k == "id" {
-            return v.into_owned();
+        if k == key {
+            return Some(v.into_owned());
         }
     }
     if let Some(frag) = url.fragment() {
         if let Some(qpos) = frag.find('?') {
             if let Ok(u) = reqwest::Url::parse(&format!("http://q/{}", &frag[qpos..])) {
                 for (k, v) in u.query_pairs() {
-                    if k == "id" {
-                        return v.into_owned();
+                    if k == key {
+                        return Some(v.into_owned());
                     }
                 }
             }
         }
     }
-    String::new()
+    None
 }
 
-/// 识别落地页所属平台与歌单 id。163cn.tv 等短链由调用方先跟随重定向再进来。
-fn classify(url: &reqwest::Url) -> (String, String) {
-    let host = url.host_str().unwrap_or("");
-    if host.ends_with("music.163.com") {
-        let id = query_id(url);
-        if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
-            return ("netease".into(), id);
-        }
-        return (String::new(), String::new());
+/// path 与片段路径拼合（music.163.com/#/playlist 的关键词藏在片段里）。
+fn path_with_fragment(url: &reqwest::Url) -> String {
+    let mut s = url.path().to_string();
+    if let Some(frag) = url.fragment() {
+        s.push('/');
+        s.push_str(frag.split('?').next().unwrap_or(""));
     }
-    if host.ends_with("y.qq.com") {
-        let id = query_id(url);
-        if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
-            return ("qq".into(), id);
+    s
+}
+
+/// 识别落地页所属平台与资源。163cn.tv 等短链由调用方先跟随重定向再进来。
+fn classify(url: &reqwest::Url) -> (String, LinkKind) {
+    let host = url.host_str().unwrap_or("");
+    if host.ends_with("music.163.com") || host == "163cn.tv" {
+        // 单曲优先（song?id= 与 playlist?id= 都用 id 参数，靠路径区分）。
+        if path_with_fragment(url).contains("song") {
+            if let Some(id) = query_value(url, "id").filter(|v| !v.is_empty()) {
+                return ("netease".into(), LinkKind::Song(id));
+            }
+            return ("netease".into(), LinkKind::NoId);
+        }
+        if let Some(id) = query_value(url, "id").filter(|v| !v.is_empty()) {
+            return ("netease".into(), LinkKind::Playlist(id));
+        }
+        return ("netease".into(), LinkKind::NoId);
+    }
+    if host.ends_with("qq.com") {
+        // 单曲：query songmid/mid 优先，其次 songDetail/…/&lt;mid&gt; 路径段。
+        for key in ["songmid", "mid"] {
+            if let Some(v) = query_value(url, key).filter(|v| !v.is_empty()) {
+                return ("qq".into(), LinkKind::Song(v));
+            }
+        }
+        let combined = path_with_fragment(url);
+        if combined.contains("song") {
+            if let Some(mut segs) = url.path_segments() {
+                if let Some(last) = segs.next_back() {
+                    if !last.is_empty() {
+                        return ("qq".into(), LinkKind::Song(last.to_string()));
+                    }
+                }
+            }
+            return ("qq".into(), LinkKind::NoId);
+        }
+        if let Some(id) = query_value(url, "id").filter(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit())) {
+            return ("qq".into(), LinkKind::Playlist(id));
         }
         if let Some(mut segs) = url.path_segments() {
             if let Some(last) = segs.next_back() {
                 if !last.is_empty() && last.chars().all(|c| c.is_ascii_digit()) {
-                    return ("qq".into(), last.to_string());
+                    return ("qq".into(), LinkKind::Playlist(last.to_string()));
                 }
             }
         }
+        return ("qq".into(), LinkKind::NoId);
     }
-    (String::new(), String::new())
+    (String::new(), LinkKind::Unknown)
 }
 
 fn netease_track(t: &Value) -> Option<PlaylistTrack> {
@@ -276,7 +346,7 @@ async fn fetch_qq_playlist(client: &reqwest::Client, id: &str) -> Result<RemoteP
     Ok(RemotePlaylist { platform: "qq".into(), name, cover, tracks })
 }
 
-/// 抓取分享链接指向的歌单：接受整段口令文本；短链自动跟随重定向。
+/// 抓取分享链接指向的歌单或单曲：接受整段口令文本；短链自动跟随重定向。
 #[tauri::command]
 pub(crate) async fn music_playlist_fetch(
     app: tauri::AppHandle,
@@ -295,12 +365,80 @@ pub(crate) async fn music_playlist_fetch(
         .await
         .map_err(|e| format!("打开链接失败：{e}"))?;
     let landing = resp.url().clone();
-    let (platform, id) = classify(&landing);
-    match platform.as_str() {
-        "netease" => fetch_netease_playlist(&client, &id).await,
-        "qq" => fetch_qq_playlist(&client, &id).await,
-        _ => Err("暂只支持网易云音乐与 QQ 音乐的分享链接".into()),
+    let (platform, kind) = classify(&landing);
+    match (platform.as_str(), kind) {
+        ("netease", LinkKind::Playlist(id)) => fetch_netease_playlist(&client, &id).await,
+        ("netease", LinkKind::Song(id)) => fetch_netease_song(&client, &id).await,
+        ("qq", LinkKind::Playlist(id)) => fetch_qq_playlist(&client, &id).await,
+        ("qq", LinkKind::Song(mid)) => fetch_qq_song(&client, &mid).await,
+        (_, LinkKind::NoId) => Err(format!(
+            "识别到{}链接，但没有找到歌单/单曲 id——请从 App 重新复制完整分享链接",
+            platform_label(&platform)
+        )),
+        _ => Err("暂只支持网易云音乐与 QQ 音乐的分享链接（酷狗/酷我等平台未开放公开接口）".into()),
     }
+}
+
+/// 网易云单曲 → 单曲目「歌单」。
+async fn fetch_netease_song(client: &reqwest::Client, id: &str) -> Result<RemotePlaylist, String> {
+    let resp = client
+        .get("https://music.163.com/api/song/detail/")
+        .header("Referer", NETEASE_REFERER)
+        .query(&[("id", id), ("ids", &format!("[{id}]"))])
+        .send()
+        .await
+        .map_err(|e| format!("请求网易云音乐失败：{e}"))?;
+    let v: Value = resp.json().await.map_err(|e| format!("解析歌曲数据失败：{e}"))?;
+    let song = v
+        .get("songs")
+        .and_then(|x| x.as_array())
+        .and_then(|a| a.first())
+        .ok_or_else(|| "歌曲不存在或已下架".to_string())?;
+    let track = netease_track(song).ok_or_else(|| "歌曲数据不完整".to_string())?;
+    let name = track.name.clone();
+    let cover = song
+        .get("album")
+        .and_then(|x| x.get("picUrl"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    Ok(RemotePlaylist {
+        platform: "netease".into(),
+        name: format!("单曲 · {name}"),
+        cover,
+        tracks: vec![track],
+    })
+}
+
+/// QQ 音乐单曲（songmid）→ 单曲目「歌单」。
+async fn fetch_qq_song(client: &reqwest::Client, mid: &str) -> Result<RemotePlaylist, String> {
+    let resp = client
+        .get("https://c.y.qq.com/v8/fcg-bin/fcg_play_single_song.fcg")
+        .header("Referer", QQ_REFERER)
+        .query(&[("songmid", mid), ("format", "json")])
+        .send()
+        .await
+        .map_err(|e| format!("请求 QQ 音乐失败：{e}"))?;
+    let v: Value = resp.json().await.map_err(|e| format!("解析歌曲数据失败：{e}"))?;
+    let song = v
+        .get("data")
+        .and_then(|x| x.as_array())
+        .and_then(|a| a.first())
+        .ok_or_else(|| "歌曲不存在或已下架".to_string())?;
+    let track = qq_track(song).ok_or_else(|| "歌曲数据不完整".to_string())?;
+    let name = track.name.clone();
+    let cover = song
+        .get("album")
+        .and_then(|x| x.get("mid"))
+        .and_then(|x| x.as_str())
+        .map(|album_mid| format!("https://y.gtimg.cn/music/photo_new/T002R500x500M000{album_mid}.jpg"))
+        .unwrap_or_default();
+    Ok(RemotePlaylist {
+        platform: "qq".into(),
+        name: format!("单曲 · {name}"),
+        cover,
+        tracks: vec![track],
+    })
 }
 
 /// 收藏歌单：同平台同名覆盖更新，否则新建（上限 50 个）。
@@ -377,6 +515,16 @@ mod tests {
             extract_url("https://y.qq.com/n/ryqq/playlist/7527130262"),
             "https://y.qq.com/n/ryqq/playlist/7527130262"
         );
+        // 全角冒号（中文输入法）自动归一化。
+        assert_eq!(
+            extract_url("分享：https：//music.163.com/playlist?id=9 快听"),
+            "https://music.163.com/playlist?id=9"
+        );
+        // 零宽字符剔除。
+        assert_eq!(
+            extract_url("https://music.163.com/playlist\u{200b}?id=8"),
+            "https://music.163.com/playlist?id=8"
+        );
         // 没有链接返回空。
         assert_eq!(extract_url("这是一段没有链接的文本"), "");
     }
@@ -384,24 +532,41 @@ mod tests {
     #[test]
     fn classification_by_landing_url() {
         let cases = [
-            ("https://music.163.com/playlist?id=3778678&userid=1", ("netease", "3778678")),
-            ("https://music.163.com/#/playlist?id=9", ("netease", "9")),
-            ("https://y.qq.com/n/ryqq/playlist/7527130262", ("qq", "7527130262")),
-            ("https://i.y.qq.com/n2/m/share/html/share.html?id=123", ("qq", "123")),
+            ("https://music.163.com/playlist?id=3778678&userid=1", ("netease", "Playlist", "3778678")),
+            ("https://music.163.com/#/playlist?id=9", ("netease", "Playlist", "9")),
+            ("https://music.163.com/song?id=346576", ("netease", "Song", "346576")),
+            ("https://music.163.com/#/song?id=346576", ("netease", "Song", "346576")),
+            ("https://y.qq.com/n/ryqq/playlist/7527130262", ("qq", "Playlist", "7527130262")),
+            ("https://i.y.qq.com/n2/m/share/html/share.html?id=123", ("qq", "Playlist", "123")),
+            (
+                "https://y.qq.com/n/ryqq/songDetail/003WjRGk1b3FPN",
+                ("qq", "Song", "003WjRGk1b3FPN"),
+            ),
+            (
+                "https://i.y.qq.com/n2/m/share/html/share.html?songmid=003WjRGk1b3FPN&fmt=1",
+                ("qq", "Song", "003WjRGk1b3FPN"),
+            ),
         ];
-        for (u, (p, id)) in cases {
+        for (u, (p, kind, id)) in cases {
             let url = reqwest::Url::parse(u).unwrap();
             let (platform, got) = classify(&url);
-            assert_eq!((platform.as_str(), got.as_str()), (p, id), "case {u}");
+            let expected = if kind == "Song" {
+                LinkKind::Song(id.to_string())
+            } else {
+                LinkKind::Playlist(id.to_string())
+            };
+            assert_eq!(platform.as_str(), p, "case {u}");
+            assert_eq!(got, expected, "case {u}");
         }
-        // 非歌单页 / 未知平台返回空。
-        let url = reqwest::Url::parse("https://music.163.com/song?id=1").unwrap();
-        assert_eq!(classify(&url).0, "netease"); // 仍是网易域（单曲链接由接口层报错）
-        let url = reqwest::Url::parse("https://example.com/x").unwrap();
-        assert_eq!(classify(&url).0, "");
-        // QQ id 非数字拒绝。
+        // 识别到平台但无 id：NoId。
+        let url = reqwest::Url::parse("https://music.163.com/").unwrap();
+        assert_eq!(classify(&url).1, LinkKind::NoId);
+        // QQ id 非数字且非单曲路径：NoId。
         let url = reqwest::Url::parse("https://y.qq.com/n/ryqq/playlist/abc").unwrap();
-        assert_eq!(classify(&url).0, "");
+        assert_eq!(classify(&url).1, LinkKind::NoId);
+        // 未知平台。
+        let url = reqwest::Url::parse("https://example.com/x").unwrap();
+        assert_eq!(classify(&url).1, LinkKind::Unknown);
     }
 
     #[test]

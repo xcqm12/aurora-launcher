@@ -447,6 +447,7 @@ export const api = {
   musicRead: (file: string, offset: number) =>
     invoke<MusicChunk>("music_read", { file, offset }),
   musicDelete: (file: string) => invoke<void>("music_delete", { file }),
+  musicClear: () => invoke<number>("music_clear"),
   musicLyrics: (file: string, duration: number) =>
     invoke<LyricsResult>("music_lyrics", { file, duration }),
   playlistFetch: (url: string) => invoke<RemotePlaylist>("music_playlist_fetch", { url }),

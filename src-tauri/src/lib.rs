@@ -3650,6 +3650,7 @@ pub fn run() {
             music::music_list,
             music::music_read,
             music::music_delete,
+            music::music_clear,
             lyrics::music_lyrics,
             playlists::music_playlist_fetch,
             playlists::music_playlist_save,

@@ -4474,6 +4474,8 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
   const [pos, setPos] = useState({ cur: 0, end: 0 });
   const [loading, setLoading] = useState(false);
   const [vol, setVol] = useState(80);
+  /* 清空曲库的两段式确认 */
+  const [confirmClear, setConfirmClear] = useState(false);
   /* 歌词：结果 + 解析行 + 当前行索引 */
   const [lyr, setLyr] = useState<LyricsResult | null>(null);
   const [lyrLines, setLyrLines] = useState<{ t: number; text: string }[]>([]);
@@ -4586,6 +4588,31 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
       const added = await api.musicImport(paths);
       await refresh();
       onNotice(added.length ? `已导入 ${added.length} 首音乐` : "所选文件没有可导入的音频");
+    } catch (error) {
+      onNotice(String(error));
+    }
+  };
+
+  /* 清空曲库：两段式确认（4 秒内再点一次），不用系统对话框 */
+  const clearLibrary = async () => {
+    if (!confirmClear) {
+      setConfirmClear(true);
+      setTimeout(() => setConfirmClear(false), 4000);
+      return;
+    }
+    setConfirmClear(false);
+    try {
+      const n = await api.musicClear();
+      audioRef.current?.pause();
+      setPlaying(false);
+      setCur(-1);
+      setTitle("未播放");
+      setLyr(null);
+      setLyrLines([]);
+      setLyrIdx(-1);
+      setPlPreview(null);
+      await refresh();
+      onNotice(`已清空曲库（删除 ${n} 首）`);
     } catch (error) {
       onNotice(String(error));
     }
@@ -4868,9 +4895,20 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
             导入你喜欢的本地音乐（mp3 / flac / ogg / wav 等），文件复制到启动器数据目录持久保存，仅在本机播放。
           </p>
         </div>
-        <button className="primary-button" onClick={() => void importMusic()}>
-          <Plus size={16} /> 导入音乐
-        </button>
+        <div className="heading-actions">
+          <button className="primary-button" onClick={() => void importMusic()}>
+            <Plus size={16} /> 导入音乐
+          </button>
+          {tracks.length > 0 && (
+            <button
+              className={`ghost-button ${confirmClear ? "danger-flash" : ""}`}
+              onClick={() => void clearLibrary()}
+              title="删除曲库中的全部音频文件"
+            >
+              <Trash2 size={16} /> {confirmClear ? "再点一次确认清空" : "清空曲库"}
+            </button>
+          )}
+        </div>
       </section>
 
       <div className="music-grid">

@@ -110,7 +110,9 @@ enum LinkKind {
     Playlist(String),
     /// 单曲（netease 数字 id / qq songmid 字母数字）。
     Song(String),
-    /// 识别到平台但没抠到 id。
+    /// 短链/中转页：需跟随重定向后再分类（163cn.tv、c6.y.qq.com/base/fcgi-bin/u）。
+    Follow,
+    /// 识别到平台但没有 id。
     NoId,
     /// 不是已支持的平台。
     Unknown,
@@ -156,10 +158,15 @@ fn path_with_fragment(url: &reqwest::Url) -> String {
     s
 }
 
-/// 识别落地页所属平台与资源。163cn.tv 等短链由调用方先跟随重定向再进来。
+/// 识别链接所属平台与资源。注意：`music.163.com/#/…?id=` 这类 SPA 片段里的
+/// id 不会随 HTTP 请求发出（片段永不发往服务器），调用方必须先用原链接分类，
+/// 只有 Follow（短链）与 Unknown 才跟随重定向。
 fn classify(url: &reqwest::Url) -> (String, LinkKind) {
     let host = url.host_str().unwrap_or("");
-    if host.ends_with("music.163.com") || host == "163cn.tv" {
+    if host == "163cn.tv" {
+        return ("netease".into(), LinkKind::Follow);
+    }
+    if host.ends_with("music.163.com") {
         // 单曲优先（song?id= 与 playlist?id= 都用 id 参数，靠路径区分）。
         if path_with_fragment(url).contains("song") {
             if let Some(id) = query_value(url, "id").filter(|v| !v.is_empty()) {
@@ -173,6 +180,10 @@ fn classify(url: &reqwest::Url) -> (String, LinkKind) {
         return ("netease".into(), LinkKind::NoId);
     }
     if host.ends_with("qq.com") {
+        // QQ 短链中转端点（c6.y.qq.com/base/fcgi-bin/u?__=…）：跟随重定向。
+        if url.path().contains("fcgi-bin/u") {
+            return ("qq".into(), LinkKind::Follow);
+        }
         // 单曲：query songmid/mid 优先，其次 songDetail/…/&lt;mid&gt; 路径段。
         for key in ["songmid", "mid"] {
             if let Some(v) = query_value(url, key).filter(|v| !v.is_empty()) {
@@ -358,14 +369,21 @@ pub(crate) async fn music_playlist_fetch(
     }
     let parsed = reqwest::Url::parse(&raw).map_err(|_| "链接格式无效".to_string())?;
     let client = http_client(&app)?;
-    // 短链（163cn.tv、c6.y.qq.com/base/fcgi-bin/u?__=…）跟随跳转拿最终地址。
-    let resp = client
-        .get(parsed)
-        .send()
-        .await
-        .map_err(|e| format!("打开链接失败：{e}"))?;
-    let landing = resp.url().clone();
-    let (platform, kind) = classify(&landing);
+    // 先用原链接本身分类：#/…?id= 片段里的 id 永远不会发给服务器，若直接
+    // GET 再看 resp.url 会把整段片段丢掉（my/m/music/playlist 链接抓不到的根因）。
+    // 只有短链（Follow）与未知域才跟随重定向取落地页。
+    let first = classify(&parsed);
+    let (platform, kind) = match first.1 {
+        LinkKind::Follow => {
+            let resp = client
+                .get(parsed)
+                .send()
+                .await
+                .map_err(|e| format!("打开链接失败：{e}"))?;
+            classify(&resp.url().clone())
+        }
+        _ => first,
+    };
     match (platform.as_str(), kind) {
         ("netease", LinkKind::Playlist(id)) => fetch_netease_playlist(&client, &id).await,
         ("netease", LinkKind::Song(id)) => fetch_netease_song(&client, &id).await,
@@ -534,6 +552,11 @@ mod tests {
         let cases = [
             ("https://music.163.com/playlist?id=3778678&userid=1", ("netease", "Playlist", "3778678")),
             ("https://music.163.com/#/playlist?id=9", ("netease", "Playlist", "9")),
+            // App 分享出的移动端路由：id 藏在 # 片段里（回归：曾被重定向跟随丢掉）。
+            (
+                "https://music.163.com/#/my/m/music/playlist?id=18264649445",
+                ("netease", "Playlist", "18264649445"),
+            ),
             ("https://music.163.com/song?id=346576", ("netease", "Song", "346576")),
             ("https://music.163.com/#/song?id=346576", ("netease", "Song", "346576")),
             ("https://y.qq.com/n/ryqq/playlist/7527130262", ("qq", "Playlist", "7527130262")),
@@ -561,6 +584,11 @@ mod tests {
         // 识别到平台但无 id：NoId。
         let url = reqwest::Url::parse("https://music.163.com/").unwrap();
         assert_eq!(classify(&url).1, LinkKind::NoId);
+        // 短链/中转：Follow（跟随重定向后再分类）。
+        let url = reqwest::Url::parse("https://163cn.tv/AbCdEf").unwrap();
+        assert_eq!(classify(&url).1, LinkKind::Follow);
+        let url = reqwest::Url::parse("https://c6.y.qq.com/base/fcgi-bin/u?__=xyz").unwrap();
+        assert_eq!(classify(&url).1, LinkKind::Follow);
         // QQ id 非数字且非单曲路径：NoId。
         let url = reqwest::Url::parse("https://y.qq.com/n/ryqq/playlist/abc").unwrap();
         assert_eq!(classify(&url).1, LinkKind::NoId);

@@ -4476,6 +4476,8 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
   const [vol, setVol] = useState(80);
   /* 清空曲库的两段式确认 */
   const [confirmClear, setConfirmClear] = useState(false);
+  /* 曲目右键菜单 */
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; index: number } | null>(null);
   /* 歌词：结果 + 解析行 + 当前行索引 */
   const [lyr, setLyr] = useState<LyricsResult | null>(null);
   const [lyrLines, setLyrLines] = useState<{ t: number; text: string }[]>([]);
@@ -4617,6 +4619,23 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
       onNotice(String(error));
     }
   };
+
+  /* 右键菜单：点击任意处 / 失焦 / Esc 关闭 */
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("blur", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [ctxMenu]);
 
   const removeTrack = async (file: string) => {
     try {
@@ -5017,6 +5036,10 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
                   key={tr.file}
                   className={`track-row ${i === cur ? "cur" : ""}`}
                   onClick={() => void loadTrack(i)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setCtxMenu({ x: e.clientX, y: e.clientY, index: i });
+                  }}
                 >
                   <span className="track-no">{i === cur ? "♪" : String(i + 1).padStart(2, "0")}</span>
                   <span className="track-name" title={tr.file}>{tr.name}</span>
@@ -5037,9 +5060,29 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
           )}
           <p className="security-note">
             音乐文件复制到数据目录 <code>music/</code> 下，仅在本机播放，不上传；上限 2000 首、单首 200 MB。
+            右键曲目可播放 / 删除。
           </p>
         </div>
       </div>
+
+      {ctxMenu && (() => {
+        const tr = tracks[ctxMenu.index];
+        if (!tr) return null;
+        const MENU_H = 84;
+        const y = Math.min(ctxMenu.y, window.innerHeight - MENU_H - 8);
+        return (
+          <div className="ctx-menu" style={{ left: ctxMenu.x, top: y }} onClick={(e) => e.stopPropagation()}>
+            <div className="ctx-title" title={tr.name}>{tr.name}</div>
+            <button onClick={() => { void loadTrack(ctxMenu.index); setCtxMenu(null); }}>播放</button>
+            <button
+              className="danger"
+              onClick={() => { void removeTrack(tr.file); setCtxMenu(null); }}
+            >
+              删除
+            </button>
+          </div>
+        );
+      })()}
 
       <div className="music-panel span-2">
         <div className="panel-h">

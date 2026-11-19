@@ -209,7 +209,8 @@ header{position:sticky;top:0;z-index:50;backdrop-filter:blur(16px);
 .pl-row .du{font-family:var(--mono);font-size:10.5px;color:var(--muted);flex-shrink:0}
 .pl-badge{display:inline-flex;align-items:center;gap:3px;font-family:var(--mono);font-size:9.5px;padding:2px 8px;border-radius:999px;flex-shrink:0}
 .pl-badge.ok{color:#7ce8c8;background:rgba(124,232,200,.12);border:1px solid rgba(124,232,200,.35)}
-.pl-badge.miss{color:var(--muted);background:rgba(255,255,255,.05);border:1px solid var(--line)}
+.pl-badge.onl{color:#6fd7f0;background:rgba(95,232,255,.1);border:1px solid rgba(95,232,255,.3)}
+.pl-row.cur{background:rgba(95,232,255,.1);border-color:rgba(95,232,255,.4)}
 .pl-head .act{border:1px solid rgba(95,232,255,.3);background:rgba(95,232,255,.06);color:var(--cyan);
   font-size:11px;padding:6px 12px;border-radius:8px;cursor:pointer;transition:.15s;font-family:var(--mono);white-space:nowrap}
 .pl-head .act:hover{background:rgba(95,232,255,.14)}
@@ -355,9 +356,11 @@ footer a{color:var(--cyan);text-decoration:none}
       <div class="pl-saved-head" id="pl-saved-head" style="display:none">SAVED · 已收藏歌单</div>
       <div id="pl-saved"></div>
       <div class="hint" style="margin-top:12px">
-        <b>说明：</b>歌单只抓取曲目元数据（歌名 / 歌手 / 时长），不下载音频；与右侧本地曲库自动匹配，
-        点<b>已匹配曲目</b>直接播放本地文件。收藏的歌单保存在浏览器本地（<code>localStorage</code>）。
-        支持网易云 / QQ 音乐的歌单与单曲分享链接（经本站同源代理转发公开接口）；酷狗 / 酷我等平台未开放公开接口。
+        <b>说明：</b>歌单保存曲目元数据（歌名 / 歌手 / 时长 / 平台 id）；与右侧本地曲库自动匹配，
+        点<b>本地</b>曲目播放本地文件，其余曲目直接<b>在线播放</b>（经本站同源代理回源平台试听流，
+        VIP / 无版权歌曲可能播不了；QQ 无版权曲自动换网易云同名曲）。收藏的歌单保存在浏览器本地
+        （<code>localStorage</code>）。支持网易云 / QQ 音乐的歌单与单曲分享链接（经本站同源代理转发公开接口）；
+        酷狗 / 酷我等平台未开放公开接口。
       </div>
     </div>
   </div>
@@ -446,6 +449,8 @@ var cur = -1;
 var audio = new Audio();
 audio.preload = "metadata";
 var objectURL = "";
+/* 歌单在线播放上下文：来自其他平台的曲目，无本地文件也直接播（cur 恒为 -1） */
+var remoteCtx = null;     // {pl, plkey, idx}
 
 var ctxA = null, analyser = null, srcNode = null;
 function ensureGraph() {
@@ -513,7 +518,7 @@ function removeTrack(i) {
   toast("已移除 " + removed.name);
 }
 
-function setNow(tr) {
+function setNow(tr, tag) {
   if (!tr) {
     $("now-title").textContent = "未播放";
     $("now-artist").textContent = "LOCAL DECK · NO SIGNAL";
@@ -528,7 +533,7 @@ function setNow(tr) {
     return;
   }
   $("now-title").textContent = tr.name;
-  $("now-artist").textContent = (tr.artist || "UNKNOWN ARTIST") + " · LOCAL FILE";
+  $("now-artist").textContent = (tr.artist || "UNKNOWN ARTIST") + " · " + (tag || "LOCAL FILE");
   $("hud-title").textContent = "NOW ▸ " + tr.name.toUpperCase().slice(0, 34);
   document.title = "▶ " + tr.name + " — Aurora Sound Deck";
 }
@@ -543,6 +548,8 @@ function playIndex(i) {
   if (i < 0 || i >= tracks.length) return;
   ensureGraph();
   if (ctxA && ctxA.state === "suspended") ctxA.resume();
+  remoteCtx = null;
+  plHighlight();
   cur = i;
   var tr = tracks[i];
   if (objectURL) URL.revokeObjectURL(objectURL);
@@ -576,7 +583,8 @@ function playIndex(i) {
 }
 
 function toggle() {
-  if (cur < 0) {
+  // 没有任何播放上下文才提示导入；在线播放中直接续播。
+  if (cur < 0 && !remoteCtx) {
     if (tracks.length) playIndex(0);
     else toast("先导入几首音乐吧");
     return;
@@ -596,8 +604,15 @@ function toggle() {
 
 function stopVisual() { /* 保留帧循环，由 isPlaying 判断 */ }
 
-function next() { if (tracks.length) playIndex((cur + 1) % tracks.length); }
-function prev() { if (tracks.length) playIndex((cur - 1 + tracks.length) % tracks.length); }
+/* 切曲：在线播放中在歌单内切（自动续播的 ended 走同一条路） */
+function stepRemote(delta) {
+  if (!remoteCtx) return false;
+  var list = remoteCtx.pl.tracks;
+  playRemoteTrack(remoteCtx.pl, (remoteCtx.idx + delta + list.length) % list.length);
+  return true;
+}
+function next() { if (!stepRemote(1) && tracks.length) playIndex((cur + 1) % tracks.length); }
+function prev() { if (!stepRemote(-1) && tracks.length) playIndex((cur - 1 + tracks.length) % tracks.length); }
 
 /* ============ 导入 ============ */
 function addFiles(files) {
@@ -711,7 +726,7 @@ function renderLyrics() {
 }
 
 function lyricsTick() {
-  if ((!lrcLines.length && !lrcPlain.length) || cur < 0 || audio.paused) return;
+  if ((!lrcLines.length && !lrcPlain.length) || (cur < 0 && !remoteCtx) || audio.paused) return;
   if (!lrcLines.length) return; // 纯文本歌词无时间轴，不做高亮
   var t = audio.currentTime;
   var idx = -1;
@@ -756,7 +771,7 @@ $("ly-clear").addEventListener("click", function () { lrcLines = []; lrcPlain = 
 /* 曲名变化时尝试加载同目录同名 .lrc（仅手动导入流程：用户拖入
    音频+同名 .lrc 一起进来时，addFiles 顺带缓存歌词文本） */
 var lrcCache = {};   // baseName -> text
-function tryAutoLrc(trackName) {
+function tryAutoLrc(trackName, artistHint) {
   if (lrcCache[trackName]) { loadLrcText(lrcCache[trackName]); return; }
   lrcLines = []; lrcPlain = [];
   renderLyrics();
@@ -765,7 +780,14 @@ function tryAutoLrc(trackName) {
     if (e) e.textContent = "离线状态——可导入与曲名同名的 .lrc 文件";
     return;
   }
-  fetchOnlineLrc(trackName);
+  fetchOnlineLrc(trackName, artistHint);
+}
+
+/* 当前正在播的是不是这首歌（本地曲库或歌单在线曲目） */
+function isCurrentTrackName(trackName) {
+  if (cur >= 0 && tracks[cur] && tracks[cur].name === trackName) return true;
+  return !!(remoteCtx && remoteCtx.pl.tracks[remoteCtx.idx] &&
+    remoteCtx.pl.tracks[remoteCtx.idx].name === trackName);
 }
 
 /* ============ 在线歌词（LRCLIB，经本站同源代理） ============ */
@@ -783,9 +805,10 @@ function deriveTitleArtist(file) {
   return { title: stem, artist: "" };
 }
 var lrcFetching = false;
-function fetchOnlineLrc(trackName) {
+function fetchOnlineLrc(trackName, artistHint) {
   if (lrcFetching) return;
-  var ta = deriveTitleArtist(trackName);
+  // 歌单在线曲目自带歌手信息，不用从文件名猜
+  var ta = artistHint ? { title: trackName, artist: artistHint } : deriveTitleArtist(trackName);
   if (!ta.title) return;
   lrcFetching = true;
   var url = "/musicapi/lrclib/api/search?track_name=" + encodeURIComponent(ta.title);
@@ -802,13 +825,13 @@ function fetchOnlineLrc(trackName) {
       var text = (picked && (picked.syncedLyrics || picked.plainLyrics)) || "";
       if (!text) throw new Error("empty");
       lrcCache[trackName] = text;
-      if (cur >= 0 && tracks[cur] && tracks[cur].name === trackName) {
+      if (isCurrentTrackName(trackName)) {
         loadLrcText(text);
         toast("已在线匹配歌词（LRCLIB）");
       }
     })
     .catch(function () {
-      if (cur >= 0 && tracks[cur] && tracks[cur].name === trackName) {
+      if (isCurrentTrackName(trackName)) {
         var e = $("ly-empty");
         if (e) e.textContent = "未找到在线歌词——可导入与曲名同名的 .lrc 文件";
       }
@@ -849,7 +872,7 @@ audio.addEventListener("ended", function () {
   // 兜底：自动切曲被策略拦下时，重播当前曲（同源 Blob 无跨域问题，
   // ended 本身来自上一次合法播放，多数浏览器允许在此恢复）。
   setTimeout(function () {
-    if (audio.paused && cur >= 0 && tracks.length) {
+    if (audio.paused && (cur >= 0 || remoteCtx)) {
       audio.play().catch(function () {});
     }
   }, 500);
@@ -901,7 +924,7 @@ function avgBand(lo, hi) {
 function draw(t) {
   if (!running) return;
   raf = requestAnimationFrame(draw);
-  var playing = !audio.paused && cur >= 0;
+  var playing = !audio.paused && (cur >= 0 || remoteCtx);
   var n = analyser ? analyser.frequencyBinCount : 0;
   if (!freqData || freqData.length !== n) { freqData = new Uint8Array(n); waveData = new Uint8Array(n); }
   if (analyser && playing) {
@@ -1090,13 +1113,15 @@ function netTrack(s) {
   if (!s || !s.name) return null;
   var artists = (s.ar || s.artists || []).map(function (a) { return a.name || ""; }).filter(Boolean).join("/");
   var dt = s.dt || s.duration || 0;
-  return { name: s.name, artist: artists, duration_sec: Math.round(dt / 1000) };
+  return { name: s.name, artist: artists, duration_sec: Math.round(dt / 1000), id: s.id ? String(s.id) : "" };
 }
 function qqTrack(s) {
   var name = s.name || s.title;
   if (!name) return null;
   var artists = (s.singer || []).map(function (a) { return a.name || ""; }).filter(Boolean).join("/");
-  return { name: name, artist: artists, duration_sec: s.interval || 0 };
+  // songlist（new_format=1）里是 mid，单曲接口里是 songmid
+  var id = s.mid || s.songmid || "";
+  return { name: name, artist: artists, duration_sec: s.interval || 0, id: String(id) };
 }
 
 async function fetchPlaylistData(c) {
@@ -1163,6 +1188,165 @@ async function fetchPlaylistData(c) {
   throw new Error("不支持的链接类型");
 }
 
+/* ============ 歌单在线播放：缺歌也直接播（经本站同源代理回源音频流） ============ */
+
+/* 网易云 CDN 直链 → 同源代理路径（nginx 端 host 白名单 *.music.126.net） */
+function neteaseCdnProxy(u) {
+  var m = /^(https?):\/\/([^\/]+\.music\.126\.net)(\/.+)$/i.exec(u);
+  return m ? "/musicapi/netease-cdn/" + m[1] + "/" + m[2] + m[3] : null;
+}
+/* QQ CDN 直链 → 同源代理路径（host 白名单 *.qqmusic.qq.com / *.tc.qq.com） */
+function qqCdnProxy(u) {
+  var m = /^(https?):\/\/((?:[a-z0-9-]+\.)+(?:qqmusic\.qq\.com|tc\.qq\.com))(\/.+)$/i.exec(u);
+  return m ? "/musicapi/qq-cdn/" + m[1] + "/" + m[2] + m[3] : null;
+}
+
+/* 网易云播放地址：enhance/player/url（匿名，免费曲给 CDN 直链）→ outer/url 兜底
+   （302 的 CDN Location 由 nginx proxy_redirect 改写成同源代理路径）。 */
+async function neteasePlayUrl(id) {
+  try {
+    var r = await fetch("/musicapi/netease/api/song/enhance/player/url?ids=" + encodeURIComponent("[" + id + "]") + "&br=320000");
+    if (r.ok) {
+      var j = await r.json();
+      var u = j.data && j.data[0] && j.data[0].url;
+      if (u) {
+        var p = neteaseCdnProxy(u);
+        if (p) return p;
+      }
+    }
+  } catch (e) { /* 接口异常走 outer/url 兜底 */ }
+  return "/musicapi/netease-stream/?id=" + encodeURIComponent(id) + ".mp3";
+}
+
+/* 换源 / 无 id 旧歌单：网易云按「歌手 歌名」搜同名曲（名称相等/互相包含 + 时长 ±8s） */
+async function neteaseSearchId(t, failMsg) {
+  var q = t.artist ? t.artist + " " + t.name : t.name;
+  var r = await fetch("/musicapi/netease/api/search/get?s=" + encodeURIComponent(q) + "&type=1&limit=8");
+  if (!r.ok) throw new Error("网易云搜索失败（HTTP " + r.status + "）");
+  var j = await r.json();
+  var songs = (j.result && j.result.songs) || [];
+  var norm = function (s) { return String(s || "").toLowerCase().replace(/\s+/g, ""); };
+  var nt = norm(t.name);
+  var durOk = function (s) {
+    if (!t.duration_sec) return true;
+    var sd = (s.duration || 0) / 1000;
+    return !sd || Math.abs(sd - t.duration_sec) <= 8;
+  };
+  var pick = function (strict) {
+    for (var i = 0; i < songs.length; i++) {
+      var nn = norm(songs[i].name);
+      var ok = strict ? nn === nt : (nn && (nn.indexOf(nt) >= 0 || nt.indexOf(nn) >= 0));
+      if (ok && durOk(songs[i])) return songs[i];
+    }
+    return null;
+  };
+  var hit = pick(true) || pick(false);
+  if (!hit || !hit.id) throw new Error(failMsg || "没有找到可播放的同名曲");
+  return String(hit.id);
+}
+
+/* QQ 播放地址：vkey 匿名接口 → sip + purl → 同源代理；purl 为空即无版权/付费 */
+async function qqPlayUrl(t) {
+  var body = {
+    req_0: {
+      module: "vkey.GetVkey",
+      method: "CgiGetVkey",
+      param: { guid: "7248189525", songmid: [t.id], songtype: [0], uin: "0", loginflag: 1, platform: "20" }
+    }
+  };
+  var r = await fetch("/musicapi/qq/cgi-bin/musicu.fcg", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  var j = await r.json();
+  var d = j.req_0 && j.req_0.data;
+  var info = d && d.midurlinfo && d.midurlinfo[0];
+  var purl = (info && info.purl) || "";
+  if (!purl) throw new Error("VIP");
+  var sip = (d.sip && d.sip[0]) || "http://dl.stream.qqmusic.qq.com/";
+  var u = sip.replace(/\/+$/, "") + "/" + purl.replace(/^\/+/, "");
+  var p = qqCdnProxy(u);
+  if (!p) throw new Error("VIP");
+  return p;
+}
+
+async function resolveRemote(platform, t) {
+  if (platform === "netease") {
+    var id = t.id || await neteaseSearchId(t, "在网易云音乐搜不到这首歌，无法在线播放");
+    return neteasePlayUrl(id);
+  }
+  if (platform === "qq") {
+    if (t.id) {
+      try { return await qqPlayUrl(t); }
+      catch (e) { /* 无版权/付费 → 换网易云同名曲 */ }
+    }
+    var nid = await neteaseSearchId(t, "QQ 音乐该曲目需付费或无版权，换源也未找到可播放版本");
+    return neteasePlayUrl(nid);
+  }
+  throw new Error("不支持的平台");
+}
+
+/* 播放歌单里的在线曲目：解析 → 同源音频流 → <audio>。 */
+async function playRemoteTrack(pl, idx) {
+  if (idx < 0 || idx >= pl.tracks.length) return;
+  var t = pl.tracks[idx];
+  var src;
+  try {
+    src = await resolveRemote(pl.platform, t);
+  } catch (e) {
+    toast(String(e && e.message ? e.message : e));
+    return;
+  }
+  ensureGraph();
+  if (ctxA && ctxA.state === "suspended") ctxA.resume();
+  if (objectURL) { URL.revokeObjectURL(objectURL); objectURL = ""; }
+  cur = -1;
+  remoteCtx = { pl: pl, plkey: plkeyOf(pl), idx: idx };
+  audio.src = src;
+  setNow(t, "ONLINE STREAM");
+  renderList();
+  plHighlight();
+  tryAutoLrc(t.name, t.artist);
+  $("play").textContent = "…";
+  if ("mediaSession" in navigator) {
+    navigator.mediaSession.metadata = new MediaMetadata({ title: t.name, artist: (t.artist || "Online") + " · Aurora Sound Deck" });
+  }
+  // 与本地播放同一坑：换 src 后等 canplay 再 play，否则被静默 stall。
+  var onCanPlay = function () {
+    audio.removeEventListener("error", onErr);
+    audio.play().then(function () {
+      $("disc").classList.add("spinning");
+      $("play").textContent = "⏸";
+    }).catch(function () {
+      $("play").textContent = "▶";
+      $("disc").classList.remove("spinning");
+      toast("已就绪：" + t.name + "，点播放继续");
+    });
+  };
+  var onErr = function () {
+    audio.removeEventListener("canplay", onCanPlay);
+    $("play").textContent = "▶";
+    $("disc").classList.remove("spinning");
+    toast("无法播放在线流：" + t.name + "（VIP / 无版权歌曲可能播不了）");
+  };
+  audio.addEventListener("canplay", onCanPlay, { once: true });
+  audio.addEventListener("error", onErr, { once: true });
+  audio.load();
+}
+
+/* 歌单卡标识：同平台同名唯一（与收藏去重同规则），用于高亮当前播放行 */
+function plkeyOf(pl) { return pl.platform + "::" + pl.name; }
+function plHighlight() {
+  document.querySelectorAll(".pl-card").forEach(function (card) {
+    var key = card.getAttribute("data-plkey") || "";
+    var on = remoteCtx && remoteCtx.plkey === key;
+    card.querySelectorAll(".pl-row").forEach(function (row) {
+      row.classList.toggle("cur", !!on && Number(row.getAttribute("data-idx")) === remoteCtx.idx);
+    });
+  });
+}
+
 /* 本地曲库匹配：精确 → 互相包含 */
 function findLocalMatch(name) {
   var n = normName(name);
@@ -1182,6 +1366,7 @@ function fmtSec(sec) { return fmt(sec || 0); }
 function buildPlCard(pl, opts) {
   var card = document.createElement("div");
   card.className = "pl-card";
+  card.setAttribute("data-plkey", plkeyOf(pl));
   var head = document.createElement("div");
   head.className = "pl-head";
   if (pl.cover) {
@@ -1198,7 +1383,7 @@ function buildPlCard(pl, opts) {
   var nLocal = pl.tracks.filter(function (t) { return findLocalMatch(t.name) >= 0; }).length;
   meta.innerHTML =
     '<div class="pl-name" title="' + esc(pl.name) + '">' + esc(pl.name) + "</div>" +
-    '<div class="pl-sub">' + (pl.platform === "qq" ? "QQ 音乐" : "网易云音乐") + " · " + pl.tracks.length + " 首 · 本地已匹配 " + nLocal + " 首</div>";
+    '<div class="pl-sub">' + (pl.platform === "qq" ? "QQ 音乐" : "网易云音乐") + " · " + pl.tracks.length + " 首 · 本地 " + nLocal + " · 在线 " + (pl.tracks.length - nLocal) + "</div>";
   head.appendChild(meta);
   (opts.actions || []).forEach(function (a) {
     var b = document.createElement("button");
@@ -1214,16 +1399,17 @@ function buildPlCard(pl, opts) {
     var local = findLocalMatch(t.name);
     var row = document.createElement("div");
     row.className = "pl-row";
-    row.title = local >= 0 ? "点击播放本地文件" : "曲库中还没有这首歌";
+    row.setAttribute("data-idx", String(i));
+    row.title = local >= 0 ? "点击播放本地文件" : "点击在线播放（无需本地文件）";
     row.innerHTML =
       '<span class="no">' + String(i + 1).padStart(2, "0") + "</span>" +
       '<span class="nm">' + esc(t.name) + "</span>" +
       '<span class="ar">' + esc(t.artist || "—") + "</span>" +
       '<span class="du">' + fmtSec(t.duration_sec) + "</span>" +
-      '<span class="pl-badge ' + (local >= 0 ? "ok" : "miss") + '">' + (local >= 0 ? "本地" : "缺歌") + "</span>";
+      '<span class="pl-badge ' + (local >= 0 ? "ok" : "onl") + '">' + (local >= 0 ? "本地" : "在线") + "</span>";
     row.addEventListener("click", function () {
       if (local >= 0) playIndex(local);
-      else toast("本地曲库中没有这首歌——可在启动器导入后播放");
+      else playRemoteTrack(pl, i);
     });
     list.appendChild(row);
   });
@@ -1315,6 +1501,7 @@ function renderSaved() {
     if (!open) card.querySelector(".pl-tracks").remove();
     box.appendChild(card);
   });
+  plHighlight();
 }
 var plOpen = {};   // 歌单卡片展开状态（仅内存，不持久化）
 

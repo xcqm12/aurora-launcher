@@ -3652,10 +3652,13 @@ pub fn run() {
             music::music_delete,
             music::music_clear,
             lyrics::music_lyrics,
+            lyrics::music_lyrics_remote,
             playlists::music_playlist_fetch,
             playlists::music_playlist_save,
             playlists::music_playlists_list,
             playlists::music_playlist_delete,
+            playlists::music_stream_open,
+            playlists::music_stream_chunk,
             changelog::app_changelog
         ])
         .run(tauri::generate_context!())

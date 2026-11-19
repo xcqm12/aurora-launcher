@@ -51,6 +51,7 @@ import {
   Changelog,
   MusicTrack,
   LyricsResult,
+  PlaylistTrack,
   RemotePlaylist,
   SavedPlaylist,
   ChangelogEntry,
@@ -4466,6 +4467,9 @@ function normTrackName(s: string): string {
   return s.toLowerCase().replace(/\s+/g, "").replace(/\.(mp3|flac|ogg|wav|m4a|aac|opus)$/i, "");
 }
 
+/* 歌单在线播放的来源上下文：平台 / 曲目列表（引用相等用于高亮）/ 当前下标 */
+type RemotePlaying = { platform: string; list: PlaylistTrack[]; index: number };
+
 function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
   const [tracks, setTracks] = useState<MusicTrack[]>([]);
   const [cur, setCur] = useState(-1);
@@ -4490,6 +4494,8 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
   const [plPreview, setPlPreview] = useState<RemotePlaylist | null>(null);
   const [savedPl, setSavedPl] = useState<SavedPlaylist[]>([]);
   const [plOpenId, setPlOpenId] = useState("");
+  /* 歌单在线播放：无本地文件的曲目走平台试听流（cur 恒为 -1） */
+  const [remote, setRemote] = useState<RemotePlaying | null>(null);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const curLineRef = useRef<HTMLDivElement | null>(null);
@@ -4499,11 +4505,20 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const barsRef = useRef<HTMLDivElement | null>(null);
   const modeRef = useRef(0);
+  /* 在线播放镜像到 ref：onEnded/step 的监听闭包读它，避免重新注册监听 */
+  const remoteRef = useRef<RemotePlaying | null>(null);
+  /* 点播序号：快速连点时旧请求作废，不覆盖新 src */
+  const playSeqRef = useRef(0);
+  const applyRemote = (r: RemotePlaying | null) => {
+    remoteRef.current = r;
+    setRemote(r);
+  };
 
   const loadTrack = useCallback(
     async (index: number) => {
       const tr = tracks[index];
       if (!tr) return;
+      applyRemote(null);
       setLoading(true);
       try {
         // 分块读回音频字节，拼成 Blob 播放。
@@ -4712,18 +4727,108 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
     });
   };
 
-  /* 拿到音频时长后，若首轮没找到歌词，带时长重试一次（提高 LRCLIB 匹配率） */
+  /* 点歌单里的「缺歌」行：走平台在线试听流（Rust 解析直链并缓存 → 分块读回 → Blob）。
+     无需本地有歌；QQ 无版权曲后端会自动换网易云同名曲。 */
+  const loadRemoteTrack = useCallback(
+    async (platform: string, list: PlaylistTrack[], index: number) => {
+      if (!list.length) return;
+      const idx = ((index % list.length) + list.length) % list.length;
+      const t = list[idx];
+      const seq = ++playSeqRef.current;
+      setLoading(true);
+      try {
+        const meta = await api.musicStreamOpen(platform, t.id ?? "", t.name, t.artist, t.duration_sec);
+        // 分块读回音频字节，拼成 Blob 播放（与本地曲目同一管线）。
+        let offset = 0;
+        const parts: Uint8Array[] = [];
+        for (;;) {
+          const chunk = await api.musicStreamChunk(meta.stream_id, offset);
+          if (!chunk.data) break;
+          const bin = atob(chunk.data);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          parts.push(bytes);
+          offset = chunk.offset;
+          if (offset >= chunk.total) break;
+        }
+        if (seq !== playSeqRef.current) return;
+        const audio = audioRef.current;
+        if (!audio) return;
+        if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+        urlRef.current = URL.createObjectURL(new Blob(parts as BlobPart[], { type: meta.mime || "audio/mpeg" }));
+        setCur(-1);
+        applyRemote({ platform, list, index: idx });
+        setTitle(t.name);
+        // 歌词与音频并行获取：无本地文件可读内嵌，按歌名/歌手查；
+        // 拿到时长后的重试由下方 effect 负责（与本地曲目同机制）。
+        setLyr(null);
+        setLyrLines([]);
+        setLyrIdx(-1);
+        setLyrLoading(true);
+        api
+          .musicLyricsRemote(platform, t.id ?? "", t.name, t.artist, 0)
+          .then((r) => {
+            setLyr(r);
+            setLyrLines(r.lrc ? parseLrc(r.lrc) : []);
+          })
+          .catch(() => setLyr(null))
+          .finally(() => setLyrLoading(false));
+        // 换 src 后等 canplay 再 play：立即 play 会因 readyState=0 被静默 stall。
+        audio.src = urlRef.current;
+        const onCanPlay = () => {
+          audio.removeEventListener("error", onError);
+          audio.play().catch(() => {
+            setPlaying(false);
+            onNotice(`已就绪：${t.name}，点播放继续`);
+          });
+        };
+        const onError = () => {
+          audio.removeEventListener("canplay", onCanPlay);
+          onNotice(`无法播放在线流：${t.name}`);
+        };
+        audio.addEventListener("canplay", onCanPlay, { once: true });
+        audio.addEventListener("error", onError, { once: true });
+        audio.load();
+      } catch (error) {
+        if (seq === playSeqRef.current) onNotice(String(error));
+      } finally {
+        if (seq === playSeqRef.current) setLoading(false);
+      }
+    },
+    [onNotice],
+  );
+
+  /* 拿到音频时长后，若首轮没找到歌词，带时长重试一次（提高 LRCLIB 匹配率）。
+     在线曲目同样适用：重试键换成 平台:id:歌名。 */
   useEffect(() => {
     if (!lyr || lyr.source !== "none" || lyrLoading || pos.end <= 1) return;
+    const r = remoteRef.current;
+    if (r) {
+      const t = r.list[r.index];
+      if (!t) return;
+      const key = `${r.platform}:${t.id ?? ""}:${t.name}`;
+      if (lyrRetryRef.current === key) return;
+      lyrRetryRef.current = key;
+      setLyrLoading(true);
+      api
+        .musicLyricsRemote(r.platform, t.id ?? "", t.name, t.artist, pos.end)
+        .then((res) => {
+          setLyr(res);
+          setLyrLines(res.lrc ? parseLrc(res.lrc) : []);
+        })
+        .catch(() => setLyr(null))
+        .finally(() => setLyrLoading(false));
+      return;
+    }
     const tr = tracks[cur];
     if (!tr || lyrRetryRef.current === tr.file) return;
     lyrRetryRef.current = tr.file;
     setLyrLoading(true);
     api
       .musicLyrics(tr.file, pos.end)
-      .then((r) => {
-        setLyr(r);
-        setLyrLines(r.lrc ? parseLrc(r.lrc) : []);
+      .then((r2) => {
+        setLyr(r2);
+        setLyrLines(r2.lrc ? parseLrc(r2.lrc) : []);
       })
       .catch(() => setLyr(null))
       .finally(() => setLyrLoading(false));
@@ -4749,7 +4854,8 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
   const toggle = () => {
     const audio = audioRef.current;
     if (!audio) return;
-    if (cur < 0) {
+    // 没有任何播放上下文才从本地曲库第一首开始；在线播放中直接续播。
+    if (cur < 0 && !remoteRef.current) {
       if (tracks.length) void loadTrack(0);
       return;
     }
@@ -4763,6 +4869,12 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
   };
 
   const step = (delta: number) => {
+    // 在线播放中：在歌单内切曲（自动续播由 onEnded 走同一条路）。
+    const r = remoteRef.current;
+    if (r) {
+      void loadRemoteTrack(r.platform, r.list, r.index + delta);
+      return;
+    }
     if (!tracks.length) return;
     const nextIndex = (cur + delta + tracks.length) % tracks.length;
     void loadTrack(nextIndex);
@@ -5119,8 +5231,9 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
               <div className="pl-meta">
                 <div className="pl-name">{plPreview.name}</div>
                 <div className="pl-sub">
-                  {plPreview.platform === "qq" ? "QQ 音乐" : "网易云音乐"} · {plPreview.tracks.length} 首 ·
-                  本地已匹配 {plPreview.tracks.filter((t) => findLocalMatch(t.name) >= 0).length} 首
+                  {plPreview.platform === "qq" ? "QQ 音乐" : "网易云音乐"} · {plPreview.tracks.length} 首 · 本地{" "}
+                  {plPreview.tracks.filter((t) => findLocalMatch(t.name) >= 0).length} · 在线{" "}
+                  {plPreview.tracks.filter((t) => findLocalMatch(t.name) < 0).length}
                 </div>
               </div>
               <button className="ghost-button" onClick={() => void savePlaylist()}>
@@ -5133,14 +5246,16 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
             <div className="pl-tracks">
               {plPreview.tracks.map((t, i) => {
                 const local = findLocalMatch(t.name);
+                const isCur = remote?.list === plPreview.tracks && remote.index === i;
                 return (
                   <div
                     key={`${t.name}-${i}`}
-                    className={`pl-row ${local >= 0 ? "hit" : "miss"}`}
+                    className={`pl-row ${local >= 0 ? "hit" : "onl"} ${isCur ? "cur" : ""}`}
                     onClick={() => {
                       if (local >= 0) void loadTrack(local);
+                      else void loadRemoteTrack(plPreview.platform, plPreview.tracks, i);
                     }}
-                    title={local >= 0 ? "点击播放本地文件" : "曲库中还没有这首歌"}
+                    title={local >= 0 ? "点击播放本地文件" : "点击在线播放（无需本地文件）"}
                   >
                     <span className="track-no">{String(i + 1).padStart(2, "0")}</span>
                     <span className="track-name">{t.name}</span>
@@ -5149,7 +5264,7 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
                     {local >= 0 ? (
                       <span className="pl-badge ok"><Check size={12} /> 本地</span>
                     ) : (
-                      <span className="pl-badge miss"><X size={12} /> 缺歌</span>
+                      <span className="pl-badge onl"><Globe2 size={12} /> 在线</span>
                     )}
                   </div>
                 );
@@ -5189,14 +5304,16 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
                   <div className="pl-tracks">
                     {p.tracks.map((t, i) => {
                       const local = findLocalMatch(t.name);
+                      const isCur = remote?.list === p.tracks && remote.index === i;
                       return (
                         <div
                           key={`${t.name}-${i}`}
-                          className={`pl-row ${local >= 0 ? "hit" : "miss"}`}
+                          className={`pl-row ${local >= 0 ? "hit" : "onl"} ${isCur ? "cur" : ""}`}
                           onClick={() => {
                             if (local >= 0) void loadTrack(local);
+                            else void loadRemoteTrack(p.platform, p.tracks, i);
                           }}
-                          title={local >= 0 ? "点击播放本地文件" : "曲库中还没有这首歌"}
+                          title={local >= 0 ? "点击播放本地文件" : "点击在线播放（无需本地文件）"}
                         >
                           <span className="track-no">{String(i + 1).padStart(2, "0")}</span>
                           <span className="track-name">{t.name}</span>
@@ -5205,7 +5322,7 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
                           {local >= 0 ? (
                             <span className="pl-badge ok"><Check size={12} /></span>
                           ) : (
-                            <span className="pl-badge miss"><X size={12} /></span>
+                            <span className="pl-badge onl"><Globe2 size={12} /></span>
                           )}
                         </div>
                       );
@@ -5217,8 +5334,9 @@ function MusicDeck({ onNotice }: { onNotice: (message: string) => void }) {
           </div>
         )}
         <p className="security-note">
-          歌单只保存曲目元数据（歌名 / 歌手 / 时长）到本机 <code>music/playlists.json</code>，不抓取音频流；支持网易云音乐与 QQ
-          音乐分享链接（含短链）。点已匹配曲目可直接播放本地文件。
+          歌单保存曲目元数据（歌名 / 歌手 / 时长 / 平台 id）到本机 <code>music/playlists.json</code>；支持网易云音乐与
+          QQ 音乐分享链接（含短链）。点曲目即播放：有本地文件放本地，其余走平台在线试听（VIP / 无版权歌曲可能播不了；
+          QQ 曲目失败时自动换网易云同名曲）。
         </p>
       </div>
     </div>

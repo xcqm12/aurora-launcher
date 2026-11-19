@@ -273,6 +273,43 @@ pub(crate) async fn music_lyrics(
     Ok(result)
 }
 
+/// 在线播放曲目（歌单导入、无本地文件）的歌词：LRCLIB → 网易云。
+/// 没有本地文件可查内嵌/按文件缓存，用「remote-{platform}-{id}」合成键落缓存。
+#[tauri::command]
+pub(crate) async fn music_lyrics_remote(
+    app: tauri::AppHandle,
+    platform: String,
+    id: String,
+    title: String,
+    artist: String,
+    duration: f64,
+) -> Result<LyricsResult, String> {
+    // 合成缓存键只允许字母数字，防歌名里带路径符号。
+    let safe: String = (if id.is_empty() { &title } else { &id })
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(32)
+        .collect();
+    let dir = music_dir(&app)?;
+    let synth = dir.join(format!("remote-{platform}-{safe}.mp3"));
+    if let Some(hit) = read_cache(&app, &synth) {
+        return Ok(hit);
+    }
+    let mut out = fetch_lrclib(&app, &title, &artist, duration).await;
+    if out.is_none() {
+        out = fetch_netease(&app, &title, &artist).await;
+    }
+    let result = out.unwrap_or(LyricsResult {
+        lrc: String::new(),
+        source: "none".into(),
+        synced: false,
+    });
+    if result.source != "none" {
+        write_cache(&app, &synth, &result);
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

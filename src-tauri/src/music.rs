@@ -12,7 +12,8 @@ use crate::data_dir;
 
 const MAX_TRACK_BYTES: u64 = 200 * 1024 * 1024;
 const MAX_TRACKS: usize = 2000;
-const MUSIC_CHUNK: i64 = 512 * 1024;
+/// 分块读回大小：本地 music_read 与在线 music_stream_chunk 共用同一协议。
+pub(crate) const MUSIC_CHUNK: i64 = 512 * 1024;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct MusicTrack {
@@ -29,6 +30,13 @@ pub(crate) struct MusicChunk {
     data: String,
     offset: i64,
     total: u64,
+}
+
+impl MusicChunk {
+    /// 构造分块（music.rs 本地读与 playlists.rs 在线流共用）。
+    pub(crate) fn new(data: String, offset: i64, total: u64) -> Self {
+        Self { data, offset, total }
+    }
 }
 
 pub(crate) fn music_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {

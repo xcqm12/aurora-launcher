@@ -257,7 +257,13 @@ export type LyricsResult = {
   synced: boolean;
 };
 
-export type PlaylistTrack = { name: string; artist: string; duration_sec: number };
+export type PlaylistTrack = {
+  name: string;
+  artist: string;
+  duration_sec: number;
+  /** 平台曲目 id（netease 数字 id / qq songmid）；旧收藏歌单可能为空串 */
+  id: string;
+};
 export type RemotePlaylist = {
   /** netease | qq */
   platform: string;
@@ -274,6 +280,9 @@ export type SavedPlaylist = {
   created_at: number;
   tracks: PlaylistTrack[];
 };
+
+/** 在线试听流句柄：music_stream_chunk 分块取数据拼 Blob 播放 */
+export type StreamMeta = { stream_id: string; mime: string; total: number };
 
 export type ChangelogEntry = {
   version: string;
@@ -455,4 +464,11 @@ export const api = {
     invoke<SavedPlaylist>("music_playlist_save", { playlist, sourceUrl }),
   playlistsList: () => invoke<SavedPlaylist[]>("music_playlists_list"),
   playlistDelete: (id: string) => invoke<void>("music_playlist_delete", { id }),
+  /* 其他平台歌单在线播放：解析平台试听流 → Rust 内存缓存 → 分块读回 */
+  musicStreamOpen: (platform: string, id: string, name: string, artist: string, durationSec: number) =>
+    invoke<StreamMeta>("music_stream_open", { platform, id, name, artist, durationSec }),
+  musicStreamChunk: (streamId: string, offset: number) =>
+    invoke<MusicChunk>("music_stream_chunk", { streamId, offset }),
+  musicLyricsRemote: (platform: string, id: string, title: string, artist: string, duration: number) =>
+    invoke<LyricsResult>("music_lyrics_remote", { platform, id, title, artist, duration }),
 };

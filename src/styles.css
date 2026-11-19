@@ -2848,10 +2848,14 @@ button:disabled {
   background: rgba(124, 232, 200, 0.12);
   border: 1px solid rgba(124, 232, 200, 0.35);
 }
-.pl-badge.miss {
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--line);
+.pl-badge.onl {
+  color: #6fd7f0;
+  background: rgba(95, 232, 255, 0.1);
+  border: 1px solid rgba(95, 232, 255, 0.3);
+}
+.pl-row.cur {
+  background: rgba(95, 232, 255, 0.1);
+  border-color: rgba(95, 232, 255, 0.4);
 }
 .pl-saved {
   display: grid;
@@ -2893,9 +2897,14 @@ button:disabled {
   background: rgba(10, 148, 112, 0.1);
   border-color: rgba(10, 148, 112, 0.35);
 }
-:root[data-theme="light"] .pl-badge.miss {
-  color: var(--muted);
-  background: rgba(10, 60, 90, 0.05);
+:root[data-theme="light"] .pl-badge.onl {
+  color: #0a86a8;
+  background: rgba(10, 148, 112, 0.08);
+  border-color: rgba(10, 148, 112, 0.3);
+}
+:root[data-theme="light"] .pl-row.cur {
+  background: rgba(10, 148, 112, 0.1);
+  border-color: rgba(10, 148, 112, 0.4);
 }
 :root[data-theme="light"] .pl-tracks::-webkit-scrollbar-thumb {
   background: rgba(23, 138, 106, 0.3);

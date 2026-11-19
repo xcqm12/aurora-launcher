@@ -357,10 +357,8 @@ footer a{color:var(--cyan);text-decoration:none}
       <div id="pl-saved"></div>
       <div class="hint" style="margin-top:12px">
         <b>说明：</b>歌单保存曲目元数据（歌名 / 歌手 / 时长 / 平台 id）；与右侧本地曲库自动匹配，
-        点<b>本地</b>曲目播放本地文件，其余曲目走<b>在线播放</b>（经本站同源代理回源平台试听流，
-        VIP / 无版权歌曲可能播不了；QQ 无版权曲自动换网易云同名曲）。<b>注意：</b>在线播放的直链
-        由平台按访问 IP 签发，本站部署在海外服务器，平台可能拒绝签发（表现为提示无法播放）——
-        <b>启动器音乐舱不受此限</b>（直链由本机直接解析）。收藏的歌单保存在浏览器本地
+        点<b>本地</b>曲目播放本地文件，其余曲目直接<b>在线播放</b>（经本站同源代理签发试听直链并回源音频流，
+        VIP / 无版权歌曲可能播不了；QQ 无版权曲自动换网易云同名曲）。收藏的歌单保存在浏览器本地
         （<code>localStorage</code>）。支持网易云 / QQ 音乐的歌单与单曲分享链接（经本站同源代理转发公开接口）；
         酷狗 / 酷我等平台未开放公开接口。
       </div>
@@ -1203,9 +1201,28 @@ function qqCdnProxy(u) {
   return m ? "/musicapi/qq-cdn/" + m[1] + "/" + m[2] + m[3] : null;
 }
 
-/* 网易云播放地址：enhance/player/url（匿名，免费曲给 CDN 直链）→ outer/url 兜底
-   （302 的 CDN Location 由 nginx proxy_redirect 改写成同源代理路径）。 */
+/* 网易云播放地址：qlm 增强 API 签发（官方匿名接口 2026-11 起全 404，这里是
+   当前唯一可用签发源）→ 官方 enhance → outer/url 兜底。返回同源代理路径。 */
 async function neteasePlayUrl(id) {
+  try {
+    var rq = await fetch("/musicapi/qlm/song/url/v1?id=" + encodeURIComponent(id) + "&level=standard&encodeType=mp3");
+    if (rq.ok) {
+      var jq = await rq.json();
+      var uq = jq.data && jq.data[0] && jq.data[0].url;
+      var pq = uq ? neteaseCdnProxy(uq) : null;
+      if (pq) return pq;
+    }
+  } catch (e) { /* 走官方链路兜底 */ }
+  try {
+    // v0 旧接口（不同上游节点，兜轮换空回包）
+    var r0 = await fetch("/musicapi/qlm/song/url?id=" + encodeURIComponent(id) + "&br=128000");
+    if (r0.ok) {
+      var j0 = await r0.json();
+      var u0 = j0.data && j0.data[0] && j0.data[0].url;
+      var p0 = u0 ? neteaseCdnProxy(u0) : null;
+      if (p0) return p0;
+    }
+  } catch (e) { /* 继续官方链路 */ }
   try {
     var r = await fetch("/musicapi/netease/api/song/enhance/player/url?ids=" + encodeURIComponent("[" + id + "]") + "&br=320000");
     if (r.ok) {

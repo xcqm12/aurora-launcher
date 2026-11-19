@@ -33,6 +33,10 @@ const MAX_PLAYLIST_TRACKS: usize = 1000;
 const MAX_SAVED_PLAYLISTS: usize = 50;
 const NETEASE_REFERER: &str = "https://music.163.com/";
 const QQ_REFERER: &str = "https://y.qq.com/";
+/// 网易云增强 API（NeteaseCloudMusicApi Enhanced 的公开部署，用户自建服务）。
+/// 2026-11 起官方 enhance/player/url 与 outer/url 对匿名请求一律返回 404
+/// （无论本机国内 IP 还是海外），匿名试听直链改为从这里签发（128k mp3）。
+const QLM_BASE: &str = "https://api.qlm.org.cn";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct PlaylistTrack {
@@ -696,27 +700,8 @@ async fn qq_vkey_url(client: &reqwest::Client, mid: &str) -> Option<String> {
     }
 }
 
-/// 网易云按「歌手 歌名」搜索匹配曲目 id（换源兜底 / 无 id 旧歌单）。
-/// 匹配从紧到宽：名称相等 + 时长 ±8s → 名称互相包含 + 时长 ±8s。
-async fn netease_search_track(
-    client: &reqwest::Client,
-    name: &str,
-    artist: &str,
-    dur: f64,
-) -> Option<u64> {
-    if name.is_empty() {
-        return None;
-    }
-    let query = if artist.is_empty() { name.to_string() } else { format!("{artist} {name}") };
-    let resp = client
-        .get("https://music.163.com/api/search/get")
-        .header("Referer", NETEASE_REFERER)
-        .query(&[("s", query.as_str()), ("type", "1"), ("limit", "8")])
-        .send()
-        .await
-        .ok()?;
-    let v = resp.json::<Value>().await.ok()?;
-    let songs = v.get("result")?.get("songs")?.as_array()?;
+/// 在搜索结果里挑同名曲：名称相等 + 时长 ±8s → 名称互相包含 + 时长 ±8s。
+fn pick_search_result(songs: &[Value], name: &str, dur: f64) -> Option<u64> {
     let norm = |s: &str| {
         s.chars()
             .filter(|c| !c.is_whitespace())
@@ -732,29 +717,117 @@ async fn netease_search_track(
         let sd = s.get("duration").and_then(|x| x.as_u64()).unwrap_or(0) as f64 / 1000.0;
         sd <= 0.0 || (sd - dur).abs() <= 8.0
     };
-    let mut chosen: Option<&Value> = None;
     for strict in [true, false] {
         for s in songs {
-            let n = s.get("name").and_then(|x| x.as_str()).unwrap_or("");
-            let nn = norm(n);
+            let nn = norm(s.get("name").and_then(|x| x.as_str()).unwrap_or(""));
             let name_ok = if strict {
                 nn == nt
             } else {
                 !nn.is_empty() && (nn.contains(&nt) || nt.contains(&nn))
             };
             if name_ok && dur_ok(s) {
-                chosen = Some(s);
-                break;
+                return s.get("id").and_then(|x| x.as_u64());
             }
         }
-        if chosen.is_some() {
-            break;
-        }
     }
-    chosen.and_then(|s| s.get("id")).and_then(|x| x.as_u64())
+    None
 }
 
-/// 网易云整链路：无 id 先按名搜索；API 直链失败再走 outer/url 探测。
+/// 网易云按「歌手 歌名」搜索匹配曲目 id（换源兜底 / 无 id 旧歌单）。
+/// 官方搜索接口优先（元数据仍可用），失败再用 qlm 增强 API 兜底。
+async fn netease_search_track(
+    client: &reqwest::Client,
+    name: &str,
+    artist: &str,
+    dur: f64,
+) -> Option<u64> {
+    if name.is_empty() {
+        return None;
+    }
+    let query = if artist.is_empty() { name.to_string() } else { format!("{artist} {name}") };
+    let official = client
+        .get("https://music.163.com/api/search/get")
+        .header("Referer", NETEASE_REFERER)
+        .query(&[("s", query.as_str()), ("type", "1"), ("limit", "8")])
+        .send()
+        .await;
+    if let Ok(resp) = official {
+        if let Ok(v) = resp.json::<Value>().await {
+            if let Some(songs) = v.get("result").and_then(|r| r.get("songs")).and_then(|x| x.as_array()) {
+                if let Some(id) = pick_search_result(songs, name, dur) {
+                    return Some(id);
+                }
+            }
+        }
+    }
+    let boosted = client
+        .get(format!("{QLM_BASE}/search"))
+        .query(&[("keywords", query.as_str()), ("type", "1"), ("limit", "8")])
+        .send()
+        .await
+        .ok()?;
+    let v: Value = boosted.json().await.ok()?;
+    let songs = v.get("result")?.get("songs")?.as_array()?;
+    pick_search_result(songs, name, dur)
+}
+
+/// 经 qlm 增强 API 签发网易云试听直链（128k mp3）。level 由低到高尝试，
+/// 匿名只能拿到 standard，其余留作未来带账号时提音质。
+/// 上游节点有轮换，同一首偶尔会回 null——调用方还会试 v0 接口与重试。
+async fn qlm_song_url(client: &reqwest::Client, id: &str, level: &str) -> Option<String> {
+    let resp = client
+        .get(format!("{QLM_BASE}/song/url/v1"))
+        .query(&[("id", id), ("level", level), ("encodeType", "mp3")])
+        .send()
+        .await
+        .ok()?;
+    let v: Value = resp.json().await.ok()?;
+    let url = v
+        .get("data")?
+        .as_array()?
+        .first()?
+        .get("url")?
+        .as_str()?
+        .trim()
+        .to_string();
+    if url.is_empty() {
+        None
+    } else {
+        Some(url)
+    }
+}
+
+/// 旧版 v0 接口（/song/url?br=）——与新接口走不同上游，可兜轮换节点的空回包。
+async fn qlm_song_url_v0(client: &reqwest::Client, id: &str, br: u32) -> Option<String> {
+    let resp = client
+        .get(format!("{QLM_BASE}/song/url"))
+        .query(&[("id", id), ("br", &br.to_string())])
+        .send()
+        .await
+        .ok()?;
+    let v: Value = resp.json().await.ok()?;
+    let url = v.get("data")?.as_array()?.first()?.get("url")?.as_str()?.trim().to_string();
+    if url.is_empty() {
+        None
+    } else {
+        Some(url)
+    }
+}
+
+/// 下直链字节（网易云 CDN 不校验 Referer，带上更稳）。
+async fn fetch_audio_bytes(client: &reqwest::Client, url: &str) -> Option<(String, Vec<u8>)> {
+    let resp = client.get(url).header("Referer", NETEASE_REFERER).send().await.ok()?;
+    let mime = response_mime(resp.headers(), "audio/mpeg");
+    let bytes = resp.bytes().await.ok()?.to_vec();
+    if bytes.is_empty() {
+        None
+    } else {
+        Some((mime, bytes))
+    }
+}
+
+/// 网易云整链路：qlm 签发（匿名可用）→ 官方 enhance → outer/url 探测。
+/// 无 id 时先按名搜索。
 async fn resolve_netease(
     client: &reqwest::Client,
     id: &str,
@@ -770,16 +843,29 @@ async fn resolve_netease(
     } else {
         id.to_string()
     };
-    if let Some(url) = netease_api_url(client, &sid).await {
-        if let Ok(resp) = client.get(&url).header("Referer", NETEASE_REFERER).send().await {
-            let mime = response_mime(resp.headers(), "audio/mpeg");
-            if let Ok(bytes) = resp.bytes().await {
-                if !bytes.is_empty() {
-                    return Ok((mime, bytes.to_vec()));
-                }
+    // 1) qlm 增强 API：官方匿名接口 2026-11 起全 404，这里才是当前可用的签发源。
+    for level in ["standard", "higher", "exhigh"] {
+        if let Some(url) = qlm_song_url(client, &sid, level).await {
+            if let Some(out) = fetch_audio_bytes(client, &url).await {
+                return Ok(out);
             }
         }
     }
+    // 1b) v0 旧接口兜底（不同上游节点，偶发轮换空回包时能救）。
+    for br in [128_000u32, 320_000] {
+        if let Some(url) = qlm_song_url_v0(client, &sid, br).await {
+            if let Some(out) = fetch_audio_bytes(client, &url).await {
+                return Ok(out);
+            }
+        }
+    }
+    // 2) 官方 enhance/player/url（若平台恢复匿名签发则自动生效）。
+    if let Some(url) = netease_api_url(client, &sid).await {
+        if let Some(out) = fetch_audio_bytes(client, &url).await {
+            return Ok(out);
+        }
+    }
+    // 3) outer/url 老兜底。
     if let Some((bytes, mime)) = netease_outer_bytes(client, &sid).await {
         return Ok((mime, bytes));
     }
@@ -1028,5 +1114,44 @@ mod tests {
         assert_eq!(k1, k2);
         assert_ne!(k1, stream_key("netease", "", "光辉岁月", "Someone Else"));
         assert!(k1.starts_with("netease:n"));
+    }
+
+    /// 联网冒烟：qlm 签发 → CDN 取流 → 得到可解码音频字节。
+    /// 官方匿名接口 2026-11 起全 404，这条链路是在线播放的命脉，发版前手动跑：
+    /// `cargo test --lib music_stream_network -- --ignored --nocapture`
+    #[test]
+    #[ignore = "network"]
+    fn music_stream_network_qlm_sign_and_fetch() {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        // 热歌榜常见的免费曲（fee=8/0，匿名可播）。
+        let cases = [
+            ("3460493895", "冬天又来临"),
+            ("1391891631", "嗜好"),
+        ];
+        let mut ok = 0;
+        for (id, name) in cases {
+            match rt.block_on(resolve_netease(&client, id, name, "", 0.0)) {
+                Ok((mime, bytes)) => {
+                    // ID3 头或 mp3 帧同步字，且不是 HTML 错误页。
+                    let magic = &bytes[..3.min(bytes.len())];
+                    assert!(bytes.len() > 20_000, "{name}: 音频过小 {} B", bytes.len());
+                    assert!(
+                        magic == b"ID3" || (bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0),
+                        "{name}: 不是音频字节（magic {magic:?}, mime {mime}）"
+                    );
+                    println!("{name}: {} B, {mime}", bytes.len());
+                    ok += 1;
+                }
+                Err(e) => println!("{name}: 失败 {e}"),
+            }
+        }
+        assert!(ok > 0, "qlm 链路全失败，在线播放会整片不可用");
     }
 }

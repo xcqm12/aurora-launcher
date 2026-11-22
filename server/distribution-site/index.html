@@ -344,6 +344,7 @@ nav a.link.cur::after{width:100%}
     <a class="link" href="#docs">文档</a>
     <span class="spacer"></span>
     <a class="link" style="color:var(--cyan);text-shadow:0 0 14px rgba(95,232,255,.5)" href="music.html">♪ 音乐舱</a>
+    <a class="link" style="color:#ffc861;text-shadow:0 0 14px rgba(255,200,97,.45)" href="experiment.html">⚗ 实验场</a>
     <a class="gh" href="https://github.com/xcqm12/aurora-launcher" target="_blank" rel="noopener">GitHub ★</a>
   </div>
 </nav>
@@ -658,6 +659,36 @@ nav a.link.cur::after{width:100%}
       <a href="https://github.com/xcqm12/aurora-launcher/tree/feature/horizon" target="_blank" rel="noopener">feature/horizon 分支</a>。
       Horizon 为独立第三方开源项目（MIT），与 Mojang/Microsoft 无关，也不含 Minecraft 的任何代码、材质或声音；
       准备资源需要你自己拥有正版 Minecraft Java Edition 26.3。
+    </div>
+  </section>
+
+  <!-- ===== 实验场 ===== -->
+  <section id="experiment">
+    <div class="reveal">
+      <span class="eyebrow" style="color:#ffc861">EXPERIMENT</span>
+      <h2 class="sec">实验场 · mc-native-exp</h2>
+      <p class="sec-sub">从官方源下载全套 Minecraft 文件 + 微软正版账号认证 + 四大模组加载器自动安装，
+      再用 Rust 手写字节码解释器原型，量化「启动不依赖 JVM」的真实差距。</p>
+    </div>
+    <div class="dl-grid reveal d1">
+      <div class="dl">
+        <span class="tag" style="color:#ffc861;border-color:rgba(255,200,97,.45)">实验项目 · 可能不稳定</span>
+        <h4>mc-native-exp</h4>
+        <small>Fabric / Forge / Quilt 1.21.4 安装+启动实测通过；NeoForge 就绪；
+        全版本官方下载 + 正版认证 + 下载断点续传 + BMCLAPI 镜像回退</small>
+        <a class="btn btn-ghost" href="experiment.html" style="border-color:rgba(255,200,97,.5);color:#ffc861">⚗ 进入实验场</a>
+      </div>
+      <div class="dl">
+        <span class="tag">数据 · 全自动</span>
+        <h4>脱 JVM 可行性报告</h4>
+        <small>11383 个 class 全解析（Java 25 格式）；第一堵墙 StringConcatFactory
+        （invokedynamic ×32134）；依赖闭包 jar 内 10662 类 + JDK 482 + 第三方 17134 处</small>
+        <a class="btn btn-ghost" href="https://github.com/xcqm12/mc-native-exp" target="_blank" rel="noopener">GitHub 仓库</a>
+      </div>
+    </div>
+    <div class="note reveal d2">
+      <b>随时切换：</b>顶部导航「⚗ 实验场」与本卡互通主站/实验页。
+      实验产物不做稳定性承诺；日常使用请回到本页 <a href="#download">下载正式版</a>。
     </div>
   </section>
 

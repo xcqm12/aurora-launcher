@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "xiaoqi-companion",
+  "version": "${version}",
+  "name": "小七 AI 伙伴（实验）",
+  "description": "客户端幽灵 AI 伙伴：自动换皮、跟随玩家、聊天指令（#ai 跟随/停下/过来/看我，其余转启动器 AI 桥）。实验项目，可能不稳定。",
+  "authors": ["Aurora"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "main": ["me.aurora.companionexp.XiaoqiMod"],
+    "client": ["me.aurora.companionexp.XiaoqiClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.16",
+    "minecraft": "~1.21.4",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
